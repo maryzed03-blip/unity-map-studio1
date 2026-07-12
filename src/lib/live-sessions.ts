@@ -1,759 +1,597 @@
-// Live classroom flow — Firestore data model.
-//
-// Quota: all reads/writes go through quota-guard wrappers. The
-// onSnapshot subscriptions here are the highest-risk paths under
-// classroom load — keep them tight (only subscribe what is currently
-// visible, unsubscribe on unmount). Live board content sync is NOT done
-// here; it uses periodic getDoc polling in CanvasStage.
-//
-// A live session always clones the source draft into a fresh board so
-// the personal draft is never overwritten.
-
+import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useAuth } from "@/lib/auth-context";
+import { ClientOnly } from "@/lib/client-only";
+import { subscribeSession, pauseSession, resumeSession, notifySessionPaused, activateAndNotifyAll, type LiveSession } from "@/lib/live-sessions";
+import { setCurrentSession } from "@/lib/presence";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import {
-  collection,
-  doc,
-  query,
-  serverTimestamp,
-  where,
-  limit,
-  arrayUnion,
-  arrayRemove,
-  type Unsubscribe,
-} from "firebase/firestore";
-import { db } from "./firebase";
-import { createProject, type WorkspaceType } from "./projects";
-import { cAddDoc, cGetDoc, cGetDocs, cOnSnapshot, cUpdateDoc } from "./quota-guard";
+  ArrowLeft,
+  Loader2,
+  Radio,
+  Save,
+  Download,
+  FileImage,
+  FileCode2,
+  FileJson,
+  MonitorPlay,
+  Eye,
+  Pencil,
+} from "lucide-react";
+import { CanvasStage } from "@/components/canvas/CanvasStage";
+import { CanvasToolbar } from "@/components/canvas/Toolbar";
+import { CanvasTabs, type CanvasTab } from "@/components/canvas/CanvasTabs";
+import { GlobalTabBar } from "@/components/canvas/GlobalTabBar";
+import type { ToolId } from "@/lib/workspaces";
+import { subscribeGroupRooms, type GroupRoom } from "@/lib/live-sessions";
+import {
+  TeacherSessionPanel,
+  StudentSessionPanel,
+  CreatorSessionPanel,
+  CollapsibleLivePanel,
+  GroupRoomsPanel,
+} from "@/components/live/LivePanels";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { toast } from "sonner";
+import { exportPNG, exportSVG, exportJSON } from "@/lib/canvas/export";
+import { mapStore } from "@/lib/canvas/storage";
 
-export type LiveSessionStatus = "active" | "paused" | "ended";
-export type InvitationStatus = "pending" | "accepted" | "declined" | "expired" | "cancelled";
+// ── Route ──────────────────────────────────────────────────────────────
 
-export interface LiveSession {
-  id: string;
-  teacherId: string;
-  teacherName: string;
-  title: string;
-  workspaceType: WorkspaceType;
-  status: LiveSessionStatus;
-  mainBoardId: string;
-  groupRoomIds: string[];
-  participantIds: string[];
-  /** UIDs allowed to edit. Creator always has edit. Others are view-only unless listed here. */
-  editPermissions?: string[];
-  /** When set, all participants see this boardId instead of mainBoardId (presentation mode). */
-  presentingBoardId?: string | null;
-  /** When set, teacher is presenting this workspace room to all. */
-  presentingRoomId?: string | null;
-  /** When false, students are returned to mainBoard but groupRooms are preserved. */
-  groupRoomsActive?: boolean;
-  /** Teacher is currently visiting this groupRoomId (triggers student notification). */
-  teacherInRoomId?: string | null;
-  createdAt?: unknown;
-  updatedAt?: unknown;
-  endedAt?: unknown;
-}
-
-export interface GroupRoom {
-  id: string;
-  sessionId: string;
-  name: string;
-  boardId: string;
-  participantIds: string[];
-  createdBy: string;
-  createdAt?: unknown;
-}
-
-export interface Invitation {
-  id: string;
-  sessionId: string;
-  fromUserId: string;
-  fromUserName: string;
-  toUserId: string;
-  status: InvitationStatus;
-  createdAt?: unknown;
-}
-
-// ---------------------- Sessions ----------------------
-
-export async function createLiveSession(opts: {
-  teacherId: string;
-  teacherName: string;
-  title: string;
-  workspaceType: WorkspaceType;
-  sourceMapId?: string;
-}): Promise<LiveSession> {
-  // ── Rule: only one active session per teacher ──────────────────────
-  const existing = await cGetDocs(
-    query(
-      collection(db(), "liveSessions"),
-      where("teacherId", "==", opts.teacherId),
-      where("status", "==", "active"),
-    ),
-  );
-  if (!existing.empty) {
-    throw new Error("Υπάρχει ήδη ενεργό Ζωντανό Μάθημα. Λήξτε το πρώτα πριν δημιουργήσετε νέο.");
-  }
-  const mainBoardId = await createProject(
-    opts.teacherId,
-    `[LIVE] ${opts.title}`,
-    "session_board",
-    opts.workspaceType,
-  );
-  await cUpdateDoc(doc(db(), "projects", mainBoardId), {
-    mode: "live",
-    sourceMapId: opts.sourceMapId ?? null,
-  });
-
-  const ref = await cAddDoc(collection(db(), "liveSessions"), {
-    teacherId: opts.teacherId,
-    teacherName: opts.teacherName,
-    title: opts.title,
-    workspaceType: opts.workspaceType,
-    status: "active" as LiveSessionStatus,
-    mainBoardId,
-    groupRoomIds: [],
-    participantIds: [opts.teacherId],
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-  });
-
-  await cUpdateDoc(doc(db(), "projects", mainBoardId), {
-    liveSessionId: ref.id,
-  });
-
-  const snap = await cGetDoc(ref);
-  return { id: ref.id, ...(snap.data() as Omit<LiveSession, "id">) };
-}
-
-export async function endLiveSession(sessionId: string, teacherId: string) {
-  const sRef = doc(db(), "liveSessions", sessionId);
-  const snap = await cGetDoc(sRef);
-  if (!snap.exists()) return;
-  const data = snap.data() as Omit<LiveSession, "id">;
-  if (data.teacherId !== teacherId) throw new Error("Only the teacher can end the session.");
-
-  await cUpdateDoc(sRef, {
-    status: "ended",
-    endedAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-  });
-
-  await cUpdateDoc(doc(db(), "projects", data.mainBoardId), {
-    mode: "collaborativeFinal",
-    status: "active_collab",
-  });
-  const roomsSnap = await cGetDocs(collection(db(), "liveSessions", sessionId, "groupRooms"));
-  for (const r of roomsSnap.docs) {
-    const g = r.data() as Omit<GroupRoom, "id">;
-    await cUpdateDoc(doc(db(), "projects", g.boardId), {
-      mode: "collaborativeFinal",
-      status: "active_collab",
-    }).catch(() => {});
-  }
-}
-
-export function subscribeMySessions(uid: string, cb: (s: LiveSession[]) => void): Unsubscribe {
-  const q = query(collection(db(), "liveSessions"), where("participantIds", "array-contains", uid));
-  return cOnSnapshot(q, (snap) => {
-    const qs = snap as unknown as {
-      docs: Array<{ id: string; data: () => Omit<LiveSession, "id"> }>;
-    };
-    const rows = qs.docs.map((d) => ({ id: d.id, ...d.data() }));
-    rows.sort((a, b) => {
-      const at = (a.updatedAt as { toMillis?: () => number } | undefined)?.toMillis?.() ?? 0;
-      const bt = (b.updatedAt as { toMillis?: () => number } | undefined)?.toMillis?.() ?? 0;
-      return bt - at;
-    });
-    cb(rows);
-  });
-}
-
-// ── Single-button live class entry point ────────────────────────────
-// This app models one classroom at a time: there is no roster/cohort
-// binding a given student to a given teacher, so "the live lesson" is
-// simply whichever liveSession is currently active. Used by
-// LiveClassButton (replaces the old browsable "live lessons" list).
-export function subscribeActiveSession(cb: (s: LiveSession | null) => void): Unsubscribe {
-  // Deliberately NOT combined with orderBy: a single equality filter uses
-  // Firestore's automatic single-field index, while equality + orderBy on
-  // a different field would need a composite index to be created manually
-  // in the Firebase console first. "Only one active session per teacher"
-  // is already enforced at creation time, so in practice there's at most
-  // one result; limit(1) just caps the (rare) multi-teacher edge case.
-  const q = query(collection(db(), "liveSessions"), where("status", "==", "active"), limit(1));
-  return cOnSnapshot(q, (snap) => {
-    const qs = snap as unknown as {
-      docs: Array<{ id: string; data: () => Omit<LiveSession, "id"> }>;
-    };
-    const row = qs.docs[0];
-    cb(row ? { id: row.id, ...row.data() } : null);
-  });
-}
-
-/** Adds a student straight into an already-active session's participant
- *  list — no invitation round-trip. Only meant to be called once the
- *  LiveClassButton has confirmed (via presence) that the teacher is
- *  actually in the room. */
-export async function joinLiveSessionDirect(sessionId: string, uid: string): Promise<void> {
-  await cUpdateDoc(doc(db(), "liveSessions", sessionId), {
-    participantIds: arrayUnion(uid),
-    updatedAt: serverTimestamp(),
-  });
-}
-
-export function subscribeSession(
-  sessionId: string,
-  cb: (s: LiveSession | null) => void,
-): Unsubscribe {
-  return cOnSnapshot(doc(db(), "liveSessions", sessionId), (snap) => {
-    const ds = snap as unknown as {
-      exists: () => boolean;
-      id: string;
-      data: () => Omit<LiveSession, "id">;
-    };
-    cb(ds.exists() ? { id: ds.id, ...ds.data() } : null);
-  });
-}
-
-// ---------------------- Group rooms ----------------------
-
-export async function createGroupRoom(opts: {
-  sessionId: string;
-  teacherId: string;
-  name: string;
-  workspaceType: WorkspaceType;
-}): Promise<GroupRoom> {
-  const boardId = await createProject(
-    opts.teacherId,
-    `[GROUP] ${opts.name}`,
-    "session_board",
-    opts.workspaceType,
-  );
-  await cUpdateDoc(doc(db(), "projects", boardId), {
-    mode: "live",
-    liveSessionId: opts.sessionId,
-  });
-
-  const ref = await cAddDoc(collection(db(), "liveSessions", opts.sessionId, "groupRooms"), {
-    sessionId: opts.sessionId,
-    name: opts.name,
-    boardId,
-    participantIds: [],
-    createdBy: opts.teacherId,
-    createdAt: serverTimestamp(),
-  });
-
-  await cUpdateDoc(doc(db(), "liveSessions", opts.sessionId), {
-    groupRoomIds: arrayUnion(ref.id),
-    updatedAt: serverTimestamp(),
-  });
-
-  const snap = await cGetDoc(ref);
-  return { id: ref.id, ...(snap.data() as Omit<GroupRoom, "id">) };
-}
-
-export function subscribeGroupRooms(
-  sessionId: string,
-  cb: (rooms: GroupRoom[]) => void,
-): Unsubscribe {
-  return cOnSnapshot(collection(db(), "liveSessions", sessionId, "groupRooms"), (snap) => {
-    const qs = snap as unknown as {
-      docs: Array<{ id: string; data: () => Omit<GroupRoom, "id"> }>;
-    };
-    cb(qs.docs.map((d) => ({ id: d.id, ...d.data() })));
-  });
-}
-
-export async function assignToGroup(sessionId: string, roomId: string, studentId: string) {
-  const rooms = await cGetDocs(collection(db(), "liveSessions", sessionId, "groupRooms"));
-  for (const r of rooms.docs) {
-    if (r.id === roomId) continue;
-    const data = r.data() as Omit<GroupRoom, "id">;
-    if (data.participantIds?.includes(studentId)) {
-      await cUpdateDoc(r.ref, { participantIds: arrayRemove(studentId) });
-    }
-  }
-  await cUpdateDoc(doc(db(), "liveSessions", sessionId, "groupRooms", roomId), {
-    participantIds: arrayUnion(studentId),
-  });
-}
-
-export async function removeFromGroup(sessionId: string, roomId: string, studentId: string) {
-  await cUpdateDoc(doc(db(), "liveSessions", sessionId, "groupRooms", roomId), {
-    participantIds: arrayRemove(studentId),
-  });
-}
-
-export const MAX_GROUP_ROOMS = 10;
-
-export async function deleteGroupRoom(sessionId: string, roomId: string) {
-  const { deleteDoc } = await import("firebase/firestore");
-  await cUpdateDoc(doc(db(), "liveSessions", sessionId), {
-    groupRoomIds: arrayRemove(roomId),
-    updatedAt: serverTimestamp(),
-  });
-  await deleteDoc(doc(db(), "liveSessions", sessionId, "groupRooms", roomId));
-}
-
-/** Student picks their own group — e.g. "όποια ομάδα έχετε στο Zoom, μπείτε εκεί"
- *  — without needing the teacher to assign them one by one. Removes them from
- *  any other group first (a student can only be in one group at a time). */
-export async function joinGroupRoom(sessionId: string, roomId: string, studentId: string) {
-  const rooms = await cGetDocs(collection(db(), "liveSessions", sessionId, "groupRooms"));
-  for (const r of rooms.docs) {
-    if (r.id === roomId) continue;
-    const data = r.data() as Omit<GroupRoom, "id">;
-    if (data.participantIds?.includes(studentId)) {
-      await cUpdateDoc(r.ref, { participantIds: arrayRemove(studentId) });
-    }
-  }
-  await cUpdateDoc(doc(db(), "liveSessions", sessionId, "groupRooms", roomId), {
-    participantIds: arrayUnion(studentId),
-  });
-}
-
-/** Teacher clicks "Αυτόματος διαχωρισμός" — evenly distributes the given
- *  students across the given (already-created) groups, round-robin, replacing
- *  any previous assignment. */
-export async function autoSplitIntoGroups(
-  sessionId: string,
-  groupRoomIds: string[],
-  studentIds: string[],
-) {
-  if (groupRoomIds.length === 0) return;
-  const shuffled = [...studentIds].sort(() => Math.random() - 0.5);
-  const buckets: string[][] = groupRoomIds.map(() => []);
-  shuffled.forEach((uid, i) => buckets[i % groupRoomIds.length].push(uid));
-  await Promise.all(
-    groupRoomIds.map((roomId, i) =>
-      cUpdateDoc(doc(db(), "liveSessions", sessionId, "groupRooms", roomId), {
-        participantIds: buckets[i],
-      }),
-    ),
+function LiveErrorFallback({ error, reset }: { error: Error; reset: () => void }) {
+  return (
+    <div className="min-h-screen flex flex-col items-center justify-center gap-3 px-4 text-center">
+      <p className="text-base font-medium">Παρουσιάστηκε σφάλμα στη ζωντανή συνεδρία.</p>
+      <p className="text-xs text-muted-foreground max-w-md">{error?.message}</p>
+      <div className="flex gap-2">
+        <Button variant="outline" onClick={reset}>Δοκιμή ξανά</Button>
+        <Button asChild><Link to="/lobby">Επιστροφή στο Lobby</Link></Button>
+      </div>
+    </div>
   );
 }
 
-// ---------------------- Invitations ----------------------
+export const Route = createFileRoute("/live/$sessionId")({
+  ssr: false,
+  head: () => ({ meta: [{ title: "Ζωντανό Μάθημα — Unity Map Studio" }] }),
+  component: () => (
+    <ClientOnly fallback={<div className="min-h-screen bg-background" />}>
+      <LiveGate />
+    </ClientOnly>
+  ),
+  errorComponent: LiveErrorFallback,
+});
 
-export async function sendInvitation(opts: {
-  sessionId: string;
-  fromUserId: string;
-  fromUserName: string;
-  toUserId: string;
-}): Promise<string> {
-  const existing = await cGetDocs(
-    query(
-      collection(db(), "invitations"),
-      where("sessionId", "==", opts.sessionId),
-      where("toUserId", "==", opts.toUserId),
-      where("status", "==", "pending"),
-    ),
+function LiveGate() {
+  const { user, loading } = useAuth();
+  const navigate = useNavigate();
+  useEffect(() => {
+    if (!loading && !user) navigate({ to: "/auth" });
+  }, [loading, user, navigate]);
+  if (loading || !user) return <div className="min-h-screen flex items-center justify-center"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>;
+  return <LiveRoom />;
+}
+
+// ── EndedSessionBar ────────────────────────────────────────────────────
+
+function EndedSessionBar({ session }: { session: LiveSession }) {
+  const { user } = useAuth();
+  const navigate = useNavigate();
+  const [saving, setSaving] = useState(false);
+
+  const saveAsDraft = async () => {
+    if (!user) return;
+    setSaving(true);
+    try {
+      const { duplicateProject } = await import("@/lib/projects");
+      const newId = await duplicateProject(user.uid, session.mainBoardId, `${session.title} (αντίγραφο)`);
+      toast.success("Αποθηκεύτηκε στη βιβλιοθήκη σας");
+      navigate({ to: "/project/$projectId", params: { projectId: newId } });
+    } catch { toast.error("Αποτυχία αποθήκευσης"); }
+    finally { setSaving(false); }
+  };
+
+  return (
+    <div className="shrink-0 border-b border-border bg-amber-50 dark:bg-amber-950/30 px-4 py-2 flex items-center gap-3 flex-wrap">
+      <span className="text-xs font-medium text-amber-800 dark:text-amber-200 flex-1">
+        📋 Το μάθημα έχει λήξει — προβολή μόνο.
+      </span>
+      <div className="flex items-center gap-2 shrink-0">
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button size="sm" variant="outline" className="gap-1.5 h-7 text-xs">
+              <Download className="h-3.5 w-3.5" /> Εξαγωγή
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-44">
+            <DropdownMenuItem onClick={async () => { try { await exportPNG(`${session.title}.png`); toast.success("PNG εξήχθη"); } catch { toast.error("Αποτυχία"); } }}>
+              <FileImage className="h-4 w-4 mr-2" /> PNG εικόνα
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => { try { exportSVG(`${session.title}.svg`); toast.success("SVG εξήχθη"); } catch { toast.error("Αποτυχία"); } }}>
+              <FileCode2 className="h-4 w-4 mr-2" /> SVG διάνυσμα
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={async () => {
+              try {
+                const s = await mapStore.load(session.mainBoardId);
+                if (s) { exportJSON(s, `${session.title}.json`); toast.success("JSON εξήχθη"); }
+              } catch { toast.error("Αποτυχία"); }
+            }}>
+              <FileJson className="h-4 w-4 mr-2" /> JSON αντίγραφο
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <Button size="sm" className="gap-1.5 h-7 text-xs" onClick={saveAsDraft} disabled={saving}>
+          {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+          Αποθήκευση στη βιβλιοθήκη μου
+        </Button>
+      </div>
+    </div>
   );
-  if (!existing.empty) return existing.docs[0].id;
-
-  const ref = await cAddDoc(collection(db(), "invitations"), {
-    sessionId: opts.sessionId,
-    fromUserId: opts.fromUserId,
-    fromUserName: opts.fromUserName,
-    toUserId: opts.toUserId,
-    status: "pending" as InvitationStatus,
-    createdAt: serverTimestamp(),
-  });
-  return ref.id;
 }
 
-export function subscribeMyInvitations(uid: string, cb: (inv: Invitation[]) => void): Unsubscribe {
-  const q = query(
-    collection(db(), "invitations"),
-    where("toUserId", "==", uid),
-    where("status", "==", "pending"),
-  );
-  return cOnSnapshot(q, (snap) => {
-    const qs = snap as unknown as {
-      docs: Array<{ id: string; data: () => Omit<Invitation, "id"> }>;
-    };
-    cb(qs.docs.map((d) => ({ id: d.id, ...d.data() })));
-  });
-}
+// ── Main LiveRoom component ────────────────────────────────────────────
 
-export async function respondToInvitation(invitationId: string, accept: boolean, uid: string) {
-  const ref = doc(db(), "invitations", invitationId);
-  const snap = await cGetDoc(ref);
-  if (!snap.exists()) return null;
-  const inv = snap.data() as Omit<Invitation, "id">;
-  if (inv.toUserId !== uid) throw new Error("Not your invitation");
-  await cUpdateDoc(ref, { status: accept ? "accepted" : "declined" });
-  if (accept) {
-    await cUpdateDoc(doc(db(), "liveSessions", inv.sessionId), {
-      participantIds: arrayUnion(uid),
-      updatedAt: serverTimestamp(),
-    });
-    return inv.sessionId;
-  }
-  return null;
-}
+function LiveRoom() {
+  const { sessionId } = Route.useParams();
+  const { user } = useAuth();
+  const [session, setSession] = useState<LiveSession | null | undefined>(undefined);
+  const [tool, setTool] = useState<ToolId>("select");
+  const [showBanner, setShowBanner] = useState(true);
+  const [groups, setGroups] = useState<GroupRoom[]>([]);
+  const [manualSaving, setManualSaving] = useState(false);
+  const saveApiRef = useRef<{ save: () => Promise<void> } | null>(null);
 
-// ── Project sharing (Διαμοιρασμός σχεδίου) ──────────────────────────
-// Creates a live session that uses the existing project's board as mainBoardId.
+  // Tab system — each tab has its own mapId
+  const [tabs, setTabs] = useState<CanvasTab[]>([]);
+  const [activeTabId, setActiveTabId] = useState<string>("");
 
-export async function shareProject(opts: {
-  ownerId: string;
-  ownerName: string;
-  projectId: string;
-  projectTitle: string;
-  workspaceType: WorkspaceType;
-}): Promise<LiveSession> {
-  const ref = await cAddDoc(collection(db(), "liveSessions"), {
-    teacherId: opts.ownerId,
-    teacherName: opts.ownerName,
-    title: opts.projectTitle,
-    workspaceType: opts.workspaceType,
-    status: "active" as LiveSessionStatus,
-    mainBoardId: opts.projectId, // use the project itself as the board
-    groupRoomIds: [],
-    participantIds: [opts.ownerId],
-    editPermissions: [opts.ownerId],
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-  });
-  const snap = await cGetDoc(ref);
-  return { id: ref.id, ...(snap.data() as Omit<LiveSession, "id">) };
-}
+  useEffect(() => subscribeGroupRooms(sessionId, setGroups), [sessionId]);
 
-export async function endProjectShare(sessionId: string, ownerId: string) {
-  await cUpdateDoc(doc(db(), "liveSessions", sessionId), {
-    status: "ended" as LiveSessionStatus,
-    endedAt: serverTimestamp(),
-  });
-}
+  useEffect(() => {
+    const t = setTimeout(() => setShowBanner(false), 4000);
+    return () => clearTimeout(t);
+  }, []);
 
-export function subscribeProjectSession(
-  projectId: string,
-  cb: (session: LiveSession | null) => void,
-) {
-  const q = query(
-    collection(db(), "liveSessions"),
-    where("mainBoardId", "==", projectId),
-    where("status", "==", "active"),
-  );
-  return cOnSnapshot(q, (snap) => {
-    const qs = snap as import("firebase/firestore").QuerySnapshot;
-    if (qs.empty) { cb(null); return; }
-    const d = qs.docs[0];
-    cb({ id: d.id, ...(d.data() as Omit<LiveSession, "id">) });
-  });
-}
+  useEffect(() => {
+    try { setCurrentSession(sessionId); } catch { /**/ }
+    return () => { try { setCurrentSession(null); } catch { /**/ } };
+  }, [sessionId]);
 
-export async function setEditPermission(
-  sessionId: string,
-  uid: string,
-  canEdit: boolean,
-) {
-  await cUpdateDoc(doc(db(), "liveSessions", sessionId), {
-    editPermissions: canEdit ? arrayUnion(uid) : arrayRemove(uid),
-    updatedAt: serverTimestamp(),
-  });
-}
-
-// ── Send design to user ───────────────────────────────────────────────
-// Copies the board to the recipient's projects as a "received_design".
-
-export async function sendDesignToUser(opts: {
-  fromUserId: string;
-  fromUserName: string;
-  toUserId: string;
-  sourceProjectId: string;
-  sourceTitle: string;
-}): Promise<void> {
-  // Record the share in a "receivedDesigns" collection for the recipient
-  await cAddDoc(collection(db(), "receivedDesigns"), {
-    toUserId: opts.toUserId,
-    fromUserId: opts.fromUserId,
-    fromUserName: opts.fromUserName,
-    sourceProjectId: opts.sourceProjectId,
-    title: opts.sourceTitle,
-    status: "pending",
-    createdAt: serverTimestamp(),
-  });
-}
-
-export interface ReceivedDesign {
-  id: string;
-  toUserId: string;
-  fromUserId: string;
-  fromUserName: string;
-  sourceProjectId: string;
-  title: string;
-  status: "pending" | "saved";
-  createdAt?: unknown;
-}
-
-export function subscribeReceivedDesigns(
-  userId: string,
-  cb: (designs: ReceivedDesign[]) => void,
-) {
-  const q = query(
-    collection(db(), "receivedDesigns"),
-    where("toUserId", "==", userId),
-    where("status", "==", "pending"),
-  );
-  return cOnSnapshot(q, (snap) => {
-    const qs = snap as import("firebase/firestore").QuerySnapshot;
-    cb(qs.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<ReceivedDesign, "id">) })));
-  });
-}
-
-export async function markDesignSaved(designId: string): Promise<void> {
-  await cUpdateDoc(doc(db(), "receivedDesigns", designId), { status: "saved" });
-}
-
-// ── Session control functions ─────────────────────────────────────────
-
-/** Teacher returns all students to main board (groupRooms preserved, not deleted). */
-export async function returnAllToMain(sessionId: string) {
-  await cUpdateDoc(doc(db(), "liveSessions", sessionId), {
-    groupRoomsActive: false,
-    teacherInRoomId: null,
-    updatedAt: serverTimestamp(),
-  });
-}
-
-/** Teacher re-activates groupRooms so students return to their rooms. */
-export async function reactivateGroupRooms(sessionId: string) {
-  await cUpdateDoc(doc(db(), "liveSessions", sessionId), {
-    groupRoomsActive: true,
-    updatedAt: serverTimestamp(),
-  });
-}
-
-/** Teacher enters a specific group room — triggers student notification. */
-export async function teacherEnterRoom(sessionId: string, roomId: string | null) {
-  await cUpdateDoc(doc(db(), "liveSessions", sessionId), {
-    teacherInRoomId: roomId,
-    updatedAt: serverTimestamp(),
-  });
-}
-
-/** Teacher presents a board to all participants (null = stop presenting). */
-export async function setPresentingBoard(sessionId: string, boardId: string | null) {
-  await cUpdateDoc(doc(db(), "liveSessions", sessionId), {
-    presentingBoardId: boardId ?? null,
-    updatedAt: serverTimestamp(),
-  });
-}
-
-/** Save all group rooms to participants' lobbies and end the session safely.
- *  Returns { saved: number, failed: string[] } so caller can abort on failure. */
-export async function endSessionAndSave(
-  sessionId: string,
-  teacherId: string,
-): Promise<{ saved: number; failed: string[] }> {
-  const { mapStore } = await import("@/lib/canvas/storage");
-  const { forceSaveBoard } = await import("@/lib/canvas/live-autosave");
-  const { createProject } = await import("@/lib/projects");
-
-  // Load all group rooms
-  const roomsSnap = await cGetDocs(
-    query(collection(db(), "liveSessions", sessionId, "groupRooms")),
-  );
-  const rooms = roomsSnap.docs.map((d) => ({
-    id: d.id,
-    ...(d.data() as Omit<GroupRoom, "id">),
-  }));
-
-  const failed: string[] = [];
-  let saved = 0;
-
-  // Step 1: Force-save each room's current snapshot to the server (with retry)
-  for (const room of rooms) {
-    const state = await mapStore.load(room.boardId);
-    if (state) {
-      const r = await forceSaveBoard(room.boardId, state, 3);
-      if (!r.ok) {
-        failed.push(`${room.name} (snapshot)`);
-        continue; // don't distribute if snapshot failed
-      }
-    }
-
-    // Step 2: Distribute a copy to each participant's lobby (ONLY their participants)
-    const participants = [...new Set([...room.participantIds, teacherId])];
-    for (const uid of participants) {
-      try {
-        const newId = await createProject(uid, room.name, "collaborative", "free-drawing");
-        if (state) {
-          const saveR = await forceSaveBoard(newId, state, 3);
-          if (!saveR.ok) throw new Error(saveR.error);
+  useEffect(() => {
+    return subscribeSession(sessionId, (s) => {
+      setSession(s);
+      if (s) {
+        // Register live tab in global persistent store
+        import("@/lib/tab-store").then(({ tabStore }) => {
+          tabStore.openTab({
+            id: `live-${sessionId}`,
+            mapId: s.mainBoardId,
+            label: s.title,
+            kind: "live",
+            closeable: true,
+            sessionId,
+          });
+        });
+        // Init local tab state
+        if (tabs.length === 0) {
+          setTabs([{ id: "main", mapId: s.mainBoardId, label: "Ζωντανό Μάθημα", kind: "live", closeable: false }]);
+          setActiveTabId("main");
         }
-        await cUpdateDoc(doc(db(), "projects", newId), {
-          sourceSessionId: sessionId,
-          sourceRoomId: room.id,
-          sessionParticipants: room.participantIds,
-          savedAt: serverTimestamp(),
-        });
-        saved++;
-      } catch (e) {
-        console.error(`Failed to save room ${room.id} for user ${uid}`, e);
-        failed.push(`${room.name} → ${uid.slice(0, 6)}`);
       }
-    }
-  }
-
-  // Step 3: Only mark session as ended if ALL saves succeeded
-  if (failed.length === 0) {
-    await cUpdateDoc(doc(db(), "liveSessions", sessionId), {
-      status: "ended" as LiveSessionStatus,
-      endedAt: serverTimestamp(),
     });
-  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId]);
 
-  return { saved, failed };
-}
+  // ── Auto-resume on teacher return ─────────────────────────────────────
+  // resumeSession has no other caller since the old browsable sessions
+  // list (with its manual "Επανεκκίνηση" button) was removed in favour of
+  // the single LiveClassButton. The teacher physically re-entering this
+  // route IS the "they're back" signal, so resume right here — otherwise
+  // a paused session (toolbar hidden, "wait for teacher" banner shown to
+  // students) can never recover.
+  useEffect(() => {
+    if (!session || !user || user.uid !== session.teacherId) return;
+    if (session.status !== "paused") return;
+    resumeSession(session.id).catch(() => {});
+  }, [session?.id, session?.status, user?.uid, session?.teacherId]);
 
-// ── Activate / announce a session ─────────────────────────────────────
-// Teacher presses "Ενεργοποίηση Μαθήματος" → sends invitation-style
-// notification to every participant so they see "Μάθημα X ξεκίνησε — Είσοδος".
+  // ── Teacher presence monitoring ──────────────────────────────────────
+  // Pause session ONLY when browser closes (beforeunload), NOT when navigating to lobby.
+  useEffect(() => {
+    if (!session || !user || user.uid !== session.teacherId) return;
+    if (session.status !== "active") return;
 
-export async function activateAndNotifyAll(
-  session: LiveSession,
-  fromUserName: string,
-): Promise<void> {
-  const toNotify = session.participantIds.filter((id) => id !== session.teacherId);
-  await Promise.all(
-    toNotify.map((uid) =>
-      cAddDoc(collection(db(), "invitations"), {
-        sessionId: session.id,
-        fromUserId: session.teacherId,
-        fromUserName,
-        toUserId: uid,
-        type: "lesson_start",
-        title: session.title,
-        status: "pending",
-        createdAt: serverTimestamp(),
-      }),
-    ),
-  );
-}
+    const handleBeforeUnload = () => {
+      // Fire-and-forget — browser is closing
+      pauseSession(session.id).catch(() => {});
+      notifySessionPaused(session, session.teacherName).catch(() => {});
+    };
 
-/** Notify an explicit list of users (e.g. everyone currently online) that a
- *  live session started — NOT limited to the session's existing
- *  participantIds. Also adds them to participantIds immediately so the
- *  session shows up in their "Ζωντανά μαθήματα" list right away, even before
- *  they act on the notification. Used right after creating/activating a
- *  session so online students don't have to be invited one by one. */
-export async function notifyOnlineUsers(
-  session: LiveSession,
-  fromUserName: string,
-  toUserIds: string[],
-): Promise<void> {
-  const targets = [...new Set(toUserIds)].filter(
-    (id) => id !== session.teacherId && !session.participantIds.includes(id),
-  );
-  if (targets.length === 0) return;
-  await cUpdateDoc(doc(db(), "liveSessions", session.id), {
-    participantIds: arrayUnion(...targets),
-    updatedAt: serverTimestamp(),
-  });
-  await Promise.all(
-    targets.map((uid) =>
-      cAddDoc(collection(db(), "invitations"), {
-        sessionId: session.id,
-        fromUserId: session.teacherId,
-        fromUserName,
-        toUserId: uid,
-        type: "lesson_start",
-        title: session.title,
-        status: "pending",
-        createdAt: serverTimestamp(),
-      }),
-    ),
-  );
-}
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [session?.id, session?.status, user?.uid]);
 
-// ── Pause / resume session on teacher disconnect ──────────────────────
+  // Open a collab room as a new tab
+  const openRoomTab = useCallback((roomId: string, boardId: string, name: string) => {
+    setTabs((prev) => {
+      const existing = prev.find((t) => t.mapId === boardId);
+      if (existing) { setActiveTabId(existing.id); return prev; }
+      const newTab: CanvasTab = {
+        id: `room-${roomId}`,
+        mapId: boardId,
+        label: name,
+        kind: "collab",
+        closeable: true,
+      };
+      setActiveTabId(newTab.id);
+      return [...prev, newTab];
+    });
+  }, []);
 
-/** Pause a session when teacher disconnects (sets status to "paused"). */
-export async function pauseSession(sessionId: string): Promise<void> {
-  await cUpdateDoc(doc(db(), "liveSessions", sessionId), {
-    status: "paused" as LiveSessionStatus,
-    updatedAt: serverTimestamp(),
-  });
-}
+  // Open a personal board as a new tab
+  const openPersonalTab = useCallback(async () => {
+    if (!user) return;
+    try {
+      const { createProject } = await import("@/lib/projects");
+      const newId = await createProject(user.uid, "Νέο σχέδιο", "personal");
+      const newTab: CanvasTab = {
+        id: `personal-${newId}`,
+        mapId: newId,
+        label: "Νέο σχέδιο",
+        kind: "personal",
+        closeable: true,
+      };
+      setTabs((prev) => [...prev, newTab]);
+      setActiveTabId(newTab.id);
+    } catch { toast.error("Αποτυχία δημιουργίας σχεδίου"); }
+  }, [user]);
 
-/** Resume a session when teacher reconnects. */
-export async function resumeSession(sessionId: string): Promise<void> {
-  await cUpdateDoc(doc(db(), "liveSessions", sessionId), {
-    status: "active" as LiveSessionStatus,
-    updatedAt: serverTimestamp(),
-  });
-}
-
-/** Notify all participants that the session was paused (teacher disconnected). */
-export async function notifySessionPaused(
-  session: LiveSession,
-  teacherName: string,
-): Promise<void> {
-  const toNotify = session.participantIds.filter((id) => id !== session.teacherId);
-  await Promise.all(
-    toNotify.map((uid) =>
-      cAddDoc(collection(db(), "invitations"), {
-        sessionId: session.id,
-        fromUserId: session.teacherId,
-        fromUserName: teacherName,
-        toUserId: uid,
-        type: "lesson_paused",
-        title: session.title,
-        status: "pending",
-        createdAt: serverTimestamp(),
-      }),
-    ),
-  );
-}
-
-// ── Auto-expire sessions older than 24 hours ─────────────────────────
-// Called on lobby load. Checks all active/paused sessions for the teacher
-// and pauses any that are older than SESSION_MAX_AGE_MS.
-// No Cloud Function needed — runs client-side on lobby mount.
-
-const SESSION_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
-
-export async function autoExpireOldSessions(teacherId: string): Promise<string[]> {
-  const expired: string[] = [];
-  try {
-    const snap = await cGetDocs(
-      query(
-        collection(db(), "liveSessions"),
-        where("teacherId", "==", teacherId),
-        where("status", "in", ["active", "paused"]),
-      ),
-    );
-    const now = Date.now();
-    for (const d of snap.docs) {
-      const data = d.data() as LiveSession;
-      const createdAt = (data.createdAt as { toMillis?: () => number })?.toMillis?.() ?? 0;
-      if (createdAt > 0 && now - createdAt > SESSION_MAX_AGE_MS) {
-        await cUpdateDoc(d.ref, {
-          status: "paused" as LiveSessionStatus,
-          autoExpiredAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        });
-        expired.push(data.title);
+  const closeTab = useCallback((tabId: string) => {
+    setTabs((prev) => {
+      const tab = prev.find((t) => t.id === tabId);
+      const next = prev.filter((t) => t.id !== tabId);
+      if (activeTabId === tabId && next.length > 0) {
+        setActiveTabId(next[next.length - 1].id);
       }
+      // Personal tabs: only keep if they have content (>1 object)
+      if (tab && tab.kind === "personal" && user) {
+        import("@/lib/canvas/storage").then(({ mapStore }) => {
+          mapStore.load(tab.mapId).then((state) => {
+            if (!state || state.objects.length <= 1) {
+              console.log(`Tab ${tab.label} was empty, not saving as draft.`);
+            }
+            // Content tabs are already auto-saved
+          });
+        });
+      }
+      return next;
+    });
+  }, [activeTabId, user]);
+
+  const goToMain = useCallback(() => setActiveTabId("main"), []);
+
+  const isTeacher = user?.uid === (session?.teacherId ?? "");
+  const isParticipant = !!user && !!(session?.participantIds ?? []).includes(user.uid);
+
+  // The moment a student's group membership changes (whether they clicked
+  // "Είσοδος" themselves or the teacher added them via the group panel),
+  // give them a real tab — same model the teacher already uses for group
+  // boards — instead of silently swapping their one-and-only canvas.
+  const lastNotifiedGroupRef = useRef<string | null>(null);
+  const hasNotifiedOnceRef = useRef(false);
+  useEffect(() => {
+    if (!user || isTeacher) return;
+    const myGroup = groups.find((g) => g.participantIds.includes(user.uid));
+    const myGroupId = myGroup?.id ?? null;
+    if (myGroupId !== lastNotifiedGroupRef.current) {
+      if (myGroup) {
+        toast.success(`Είστε στην ομάδα «${myGroup.name}»`, { duration: 5000 });
+        openRoomTab(myGroup.id, myGroup.boardId, `👥 ${myGroup.name}`);
+      } else if (hasNotifiedOnceRef.current) {
+        toast.info("Βγήκατε από την ομάδα", { duration: 3000 });
+        // Their group tab no longer applies — drop it and land back on
+        // the main lesson tab.
+        const prevGroupId = lastNotifiedGroupRef.current;
+        if (prevGroupId) closeTab(`room-${prevGroupId}`);
+      }
+      lastNotifiedGroupRef.current = myGroupId;
+      hasNotifiedOnceRef.current = true;
     }
-  } catch (e) {
-    console.warn("autoExpireOldSessions failed", e);
-  }
-  return expired;
-}
+  }, [groups, user, isTeacher, openRoomTab, closeTab]);
 
-/** Teacher presents a workspace room to all participants. null = stop. */
-export async function setPresentingRoom(sessionId: string, roomId: string | null) {
-  await cUpdateDoc(doc(db(), "liveSessions", sessionId), {
-    presentingRoomId: roomId ?? null,
-    updatedAt: serverTimestamp(),
-  });
-}
+  // Guard conditions — all hooks must be above these
+  if (session === undefined) return <div className="min-h-screen flex items-center justify-center"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>;
+  if (!session) return <div className="min-h-screen flex flex-col items-center justify-center gap-3"><p className="text-sm text-muted-foreground">Η συνεδρία δεν βρέθηκε.</p><Button asChild variant="outline"><Link to="/lobby">Επιστροφή</Link></Button></div>;
+  if (!session.mainBoardId) return <div className="min-h-screen flex flex-col items-center justify-center gap-3"><p className="text-sm text-muted-foreground">Ο πίνακας δεν είναι διαθέσιμος.</p><Button asChild variant="outline"><Link to="/lobby">Επιστροφή</Link></Button></div>;
+  if (!isParticipant && !isTeacher) return (
+    <div className="min-h-screen flex flex-col items-center justify-center gap-3">
+      <p className="text-sm text-muted-foreground">Δεν είστε μέλος αυτής της συνεδρίας.</p>
+      <Button asChild variant="outline"><Link to="/lobby">Επιστροφή</Link></Button>
+    </div>
+  );
 
-/** Delete an invitation document (used for info-only notifications like lesson_paused). */
-export async function deleteInvitation(invitationId: string): Promise<void> {
-  const { deleteDoc } = await import("firebase/firestore");
-  await deleteDoc(doc(db(), "invitations", invitationId));
+  const activeTab = tabs.find((t) => t.id === activeTabId);
+
+  // Presentation mode: students see the presented board read-only
+  const isPresentationMode = !isTeacher && !!session.presentingBoardId;
+
+  // Students are read-only on the main live board UNLESS teacher granted edit permission
+  const studentHasEditOnMain = !isTeacher && (session.editPermissions ?? []).includes(user?.uid ?? "");
+
+  // The student's own group, if any — still used to know whether a group
+  // tab should exist / what banner to show, but no longer force-swaps
+  // their canvas. Students now use the same tab bar as the teacher: a
+  // "Ζωντανό Μάθημα" tab plus one tab per group they've joined, and they
+  // click between them like the teacher does.
+  const myGroup = !isTeacher ? groups.find((g) => g.participantIds.includes(user?.uid ?? "")) : undefined;
+
+  const studentOnGroupTab = !isPresentationMode && activeTab?.kind === "collab";
+  const studentIsShowingOwnGroup = studentOnGroupTab;
+  const studentIsShowingMain = !isPresentationMode && !studentOnGroupTab;
+  // Presentation mode always overrides whatever tab a student has open —
+  // it's a broadcast from the teacher, not a personal navigation choice.
+  const studentBoardId = session.presentingBoardId || activeTab?.mapId || session.mainBoardId;
+
+  // For the TEACHER, tabs still apply (main + any group boards they've
+  // opened to check in on). "collab" tabs are teacher-only navigation now.
+  const activeGroup = isTeacher && activeTab?.kind === "collab"
+    ? groups.find((g) => g.boardId === activeTab.mapId)
+    : undefined;
+
+  const isLiveOwner = isTeacher
+    ? true
+    : isPresentationMode
+      ? false
+      : studentIsShowingOwnGroup
+        ? true // any group member can co-edit with their groupmates
+        : studentHasEditOnMain; // showing the central board — needs explicit permission
+
+  const isReadOnly =
+    session.status === "ended" ||
+    session.status === "paused" ||
+    (!isTeacher && !isLiveOwner);
+
+  return (
+    <div className="h-screen flex flex-col bg-background overflow-hidden">
+      {/* Header */}
+      <header className="h-14 border-b border-border bg-surface flex items-center justify-between px-4 shrink-0 z-10">
+        <div className="flex items-center gap-3 min-w-0">
+          <Button asChild variant="ghost" size="sm" className="gap-2 shrink-0">
+            <Link to="/lobby"><ArrowLeft className="h-4 w-4" />Lobby</Link>
+          </Button>
+          <div className="h-5 w-px bg-border shrink-0" />
+          <div className="flex items-center gap-2 min-w-0">
+            <Radio className="h-4 w-4 text-[color:var(--success)] shrink-0 animate-pulse" />
+            <span className="text-sm font-semibold truncate">{session.title}</span>
+            <Badge variant={session.status === "active" ? "default" : session.status === "paused" ? "outline" : "secondary"} className="shrink-0">
+              {session.status === "active" ? "Σε εξέλιξη" : session.status === "paused" ? "⏸ Διακοπή" : "Έληξε"}
+            </Badge>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          {!isReadOnly && session.status === "active" && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="gap-1.5 h-7 text-xs"
+              disabled={manualSaving}
+              onClick={async () => {
+                if (!saveApiRef.current) return;
+                setManualSaving(true);
+                try {
+                  await saveApiRef.current.save();
+                  toast.success("Αποθηκεύτηκε");
+                } catch {
+                  toast.error("Η αποθήκευση απέτυχε");
+                } finally {
+                  setManualSaving(false);
+                }
+              }}
+            >
+              {manualSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+              Αποθήκευση
+            </Button>
+          )}
+          {session.presentingBoardId && !isTeacher && (
+            <span className="flex items-center gap-1.5 text-xs font-bold text-primary border border-primary/30 rounded px-2 py-0.5">
+              <MonitorPlay className="h-3.5 w-3.5" /> Παρουσίαση
+            </span>
+          )}
+          <span className="hidden sm:flex items-center gap-1.5 text-xs font-bold tracking-widest uppercase text-[color:var(--success)] border border-[color:var(--success)] rounded px-2 py-0.5">
+            <span className="h-1.5 w-1.5 rounded-full bg-[color:var(--success)] animate-pulse" />
+            Ζωντανό Μάθημα
+          </span>
+        </div>
+      </header>
+
+      {/* Entrance banner */}
+      {showBanner && (
+        <div className="absolute inset-x-0 top-14 z-50 flex justify-center pointer-events-none">
+          <div className="mt-4 flex items-center gap-3 bg-primary text-primary-foreground rounded-xl px-6 py-3 shadow-xl animate-in fade-in slide-in-from-top-4 duration-300">
+            <Radio className="h-5 w-5 animate-pulse" />
+            <div>
+              <p className="text-sm font-bold tracking-wide uppercase">Ζωντανό Μάθημα σε Εξέλιξη</p>
+              <p className="text-xs opacity-80">{session.title} · Καλωσήρθατε!</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Ended bar */}
+      {session.status === "ended" && <EndedSessionBar session={session} />}
+      {session.status === "paused" && !isTeacher && (
+        <div className="shrink-0 border-b border-border bg-amber-50 dark:bg-amber-950/20 px-4 py-3 flex items-center gap-3">
+          <span className="text-lg">⏸</span>
+          <div>
+            <p className="text-sm font-semibold text-amber-800 dark:text-amber-200">
+              Το μάθημα διακόπηκε προσωρινά
+            </p>
+            <p className="text-xs text-amber-700 dark:text-amber-300">
+              Ο καθηγητής αποσυνδέθηκε. Περιμένετε την επανεκκίνηση.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Global persistent tab bar */}
+      <GlobalTabBar
+        currentMapId={tabs.find((t) => t.id === activeTabId)?.mapId}
+        onTabSwitch={(mapId, kind) => {
+          // If switching to a local tab (collab room), update activeTabId
+          const localTab = tabs.find((t) => t.mapId === mapId);
+          if (localTab) setActiveTabId(localTab.id);
+        }}
+      />
+
+      {/* Tab bar — main lesson + any group boards opened. Now shared by
+          teacher and students alike (students: main + their own group, if
+          any); presentation mode below overrides display regardless. */}
+      {tabs.length > 1 && (
+        <CanvasTabs
+          tabs={tabs}
+          activeId={activeTabId}
+          onSwitch={setActiveTabId}
+          onClose={closeTab}
+        />
+      )}
+
+      {/* Main content */}
+      <div className="flex-1 flex min-h-0 overflow-hidden">
+        {/* Toolbar — hidden only when ended or in presentation mode */}
+        {!isReadOnly && session.status === "active" && (
+          <div className="shrink-0">
+            <CanvasToolbar tool={tool} setTool={setTool} workspaceType={session.workspaceType} />
+          </div>
+        )}
+
+        {/* Canvas */}
+        <div className="flex-1 relative overflow-hidden flex flex-col" style={{ minWidth: 0 }}>
+          {/* Student banners — exactly one of these three applies at a time */}
+          {!isTeacher && session.status === "active" && isPresentationMode && (
+            <div className="shrink-0 border-b border-border bg-primary/10 px-4 py-1.5 flex items-center gap-2">
+              <MonitorPlay className="h-3.5 w-3.5 text-primary shrink-0" />
+              <span className="text-xs text-primary font-medium">
+                Ο καθηγητής παρουσιάζει — προβολή μόνο
+              </span>
+            </div>
+          )}
+          {!isTeacher && session.status === "active" && studentIsShowingOwnGroup && (
+            <div className="shrink-0 border-b border-border bg-green-50 dark:bg-green-950/20 px-4 py-1.5 flex items-center gap-2">
+              <Pencil className="h-3.5 w-3.5 text-green-600 shrink-0" />
+              <span className="text-xs text-green-700 dark:text-green-400 font-medium">
+                Ομάδα «{myGroup?.name}» — μπορείτε να επεξεργαστείτε μαζί με την ομάδα σας
+              </span>
+            </div>
+          )}
+          {!isTeacher && session.status === "active" && studentIsShowingMain && !studentHasEditOnMain && (
+            <div className="shrink-0 border-b border-border bg-muted/50 px-4 py-1.5 flex items-center gap-2">
+              <Eye className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+              <span className="text-xs text-muted-foreground">
+                Προβολή μόνο — ο καθηγητής μπορεί να σας δώσει άδεια επεξεργασίας
+              </span>
+            </div>
+          )}
+          {!isTeacher && session.status === "active" && studentIsShowingMain && studentHasEditOnMain && (
+            <div className="shrink-0 border-b border-border bg-green-50 dark:bg-green-950/20 px-4 py-1.5 flex items-center gap-2">
+              <Pencil className="h-3.5 w-3.5 text-green-600 shrink-0" />
+              <span className="text-xs text-green-700 dark:text-green-400 font-medium">
+                Έχετε άδεια επεξεργασίας από τον καθηγητή
+              </span>
+            </div>
+          )}
+
+          <div className="flex-1 relative overflow-hidden">
+          {isPresentationMode ? (
+            // Student, teacher is presenting: ignore tabs entirely, show
+            // exactly what's being broadcast, read-only.
+            <div className="absolute inset-0">
+              <CanvasStage
+                mapId={studentBoardId}
+                tool={tool}
+                setTool={setTool}
+                isActive
+                onReady={(api) => { saveApiRef.current = api; }}
+                liveSync={session.status === "active"}
+                liveOwner={isLiveOwner}
+                readOnly={isReadOnly}
+              />
+            </div>
+          ) : (
+            // Teacher and students alike: every open tab (main lesson +
+            // any group boards) stays mounted so switching between them is
+            // instant and never loses in-progress edits.
+            tabs.map((tab) => {
+              const isActive = tab.id === activeTabId;
+              return (
+                // Keep ALL tabs mounted — visibility:hidden preserves state without display:none unmount
+                <div
+                  key={tab.id}
+                  className="absolute inset-0"
+                  style={{
+                    visibility: isActive ? "visible" : "hidden",
+                    pointerEvents: isActive ? "auto" : "none",
+                    zIndex: isActive ? 1 : 0,
+                  }}
+                >
+                  <CanvasStage
+                    mapId={tab.mapId}
+                    tool={tool}
+                    setTool={setTool}
+                    isActive={isActive}
+                    onReady={isActive ? (api) => { saveApiRef.current = api; } : undefined}
+                    liveSync={session.status === "active"}
+                    liveOwner={
+                      isTeacher
+                        ? isLiveOwner
+                        : tab.kind === "collab"
+                          ? true // any group member can co-edit with their groupmates
+                          : studentHasEditOnMain
+                    }
+                    readOnly={
+                      isTeacher
+                        ? isReadOnly
+                        : session.status === "ended" ||
+                          session.status === "paused" ||
+                          (tab.kind === "collab" ? false : !studentHasEditOnMain)
+                    }
+                  />
+                </div>
+              );
+            })
+          )}
+          </div>
+        </div>
+
+        {/* Side panel */}
+        <CollapsibleLivePanel>
+          {isTeacher ? (
+            <>
+              <TeacherSessionPanel session={session} onOpenRoom={openRoomTab} />
+              <div className="border-t border-border pt-3 mt-1">
+                <GroupRoomsPanel session={session} isTeacher onOpenGroup={openRoomTab} />
+              </div>
+            </>
+          ) : (
+            <>
+              <StudentSessionPanel
+                session={session}
+                currentTabLabel={
+                  isPresentationMode ? "Παρουσίαση" : myGroup ? `Ομάδα «${myGroup.name}»` : "Ζωντανό Μάθημα"
+                }
+              />
+              <div className="border-t border-border pt-3 mt-1">
+                <GroupRoomsPanel session={session} isTeacher={false} />
+              </div>
+            </>
+          )}
+        </CollapsibleLivePanel>
+      </div>
+    </div>
+  );
 }
