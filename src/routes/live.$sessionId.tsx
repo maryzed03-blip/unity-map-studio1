@@ -188,6 +188,19 @@ function LiveRoom() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
+  // ── Auto-resume on teacher return ─────────────────────────────────────
+  // resumeSession has no other caller since the old browsable sessions
+  // list (with its manual "Επανεκκίνηση" button) was removed in favour of
+  // the single LiveClassButton. The teacher physically re-entering this
+  // route IS the "they're back" signal, so resume right here — otherwise
+  // a paused session (toolbar hidden, "wait for teacher" banner shown to
+  // students) can never recover.
+  useEffect(() => {
+    if (!session || !user || user.uid !== session.teacherId) return;
+    if (session.status !== "paused") return;
+    resumeSession(session.id).catch(() => {});
+  }, [session?.id, session?.status, user?.uid, session?.teacherId]);
+
   // ── Teacher presence monitoring ──────────────────────────────────────
   // Pause session ONLY when browser closes (beforeunload), NOT when navigating to lobby.
   useEffect(() => {
@@ -266,9 +279,10 @@ function LiveRoom() {
   const isTeacher = user?.uid === (session?.teacherId ?? "");
   const isParticipant = !!user && !!(session?.participantIds ?? []).includes(user.uid);
 
-  // Notify the student the moment their group membership changes — no tab
-  // to open, no button to press. Their view (below) recomputes automatically
-  // from `groups`, so the notification is purely informational.
+  // The moment a student's group membership changes (whether they clicked
+  // "Είσοδος" themselves or the teacher added them via the group panel),
+  // give them a real tab — same model the teacher already uses for group
+  // boards — instead of silently swapping their one-and-only canvas.
   const lastNotifiedGroupRef = useRef<string | null>(null);
   const hasNotifiedOnceRef = useRef(false);
   useEffect(() => {
@@ -276,15 +290,20 @@ function LiveRoom() {
     const myGroup = groups.find((g) => g.participantIds.includes(user.uid));
     const myGroupId = myGroup?.id ?? null;
     if (myGroupId !== lastNotifiedGroupRef.current) {
-      if (myGroupId) {
-        toast.success(`Είστε στην ομάδα «${myGroup?.name}»`, { duration: 5000 });
+      if (myGroup) {
+        toast.success(`Είστε στην ομάδα «${myGroup.name}»`, { duration: 5000 });
+        openRoomTab(myGroup.id, myGroup.boardId, `👥 ${myGroup.name}`);
       } else if (hasNotifiedOnceRef.current) {
         toast.info("Βγήκατε από την ομάδα", { duration: 3000 });
+        // Their group tab no longer applies — drop it and land back on
+        // the main lesson tab.
+        const prevGroupId = lastNotifiedGroupRef.current;
+        if (prevGroupId) closeTab(`room-${prevGroupId}`);
       }
       lastNotifiedGroupRef.current = myGroupId;
       hasNotifiedOnceRef.current = true;
     }
-  }, [groups, user, isTeacher]);
+  }, [groups, user, isTeacher, openRoomTab, closeTab]);
 
   // Guard conditions — all hooks must be above these
   if (session === undefined) return <div className="min-h-screen flex items-center justify-center"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>;
@@ -305,16 +324,19 @@ function LiveRoom() {
   // Students are read-only on the main live board UNLESS teacher granted edit permission
   const studentHasEditOnMain = !isTeacher && (session.editPermissions ?? []).includes(user?.uid ?? "");
 
-  // The student's own group, if any. Students don't manage tabs — their
-  // canvas is always ONE of exactly three things, recomputed automatically:
-  //   1. Whatever the teacher is presenting right now (read-only), or else
-  //   2. Their own group's board (co-editable with groupmates), or else
-  //   3. The central class board (editable only with explicit permission).
+  // The student's own group, if any — still used to know whether a group
+  // tab should exist / what banner to show, but no longer force-swaps
+  // their canvas. Students now use the same tab bar as the teacher: a
+  // "Ζωντανό Μάθημα" tab plus one tab per group they've joined, and they
+  // click between them like the teacher does.
   const myGroup = !isTeacher ? groups.find((g) => g.participantIds.includes(user?.uid ?? "")) : undefined;
 
-  const studentBoardId = session.presentingBoardId || myGroup?.boardId || session.mainBoardId;
-  const studentIsShowingOwnGroup = !isPresentationMode && !!myGroup;
-  const studentIsShowingMain = !isPresentationMode && !myGroup;
+  const studentOnGroupTab = !isPresentationMode && activeTab?.kind === "collab";
+  const studentIsShowingOwnGroup = studentOnGroupTab;
+  const studentIsShowingMain = !isPresentationMode && !studentOnGroupTab;
+  // Presentation mode always overrides whatever tab a student has open —
+  // it's a broadcast from the teacher, not a personal navigation choice.
+  const studentBoardId = session.presentingBoardId || activeTab?.mapId || session.mainBoardId;
 
   // For the TEACHER, tabs still apply (main + any group boards they've
   // opened to check in on). "collab" tabs are teacher-only navigation now.
@@ -427,8 +449,10 @@ function LiveRoom() {
         }}
       />
 
-      {/* Teacher's tab bar — switch between the main board and any group boards opened */}
-      {isTeacher && tabs.length > 1 && (
+      {/* Tab bar — main lesson + any group boards opened. Now shared by
+          teacher and students alike (students: main + their own group, if
+          any); presentation mode below overrides display regardless. */}
+      {tabs.length > 1 && (
         <CanvasTabs
           tabs={tabs}
           activeId={activeTabId}
@@ -483,7 +507,25 @@ function LiveRoom() {
           )}
 
           <div className="flex-1 relative overflow-hidden">
-          {isTeacher ? (
+          {isPresentationMode ? (
+            // Student, teacher is presenting: ignore tabs entirely, show
+            // exactly what's being broadcast, read-only.
+            <div className="absolute inset-0">
+              <CanvasStage
+                mapId={studentBoardId}
+                tool={tool}
+                setTool={setTool}
+                isActive
+                onReady={(api) => { saveApiRef.current = api; }}
+                liveSync={session.status === "active"}
+                liveOwner={isLiveOwner}
+                readOnly={isReadOnly}
+              />
+            </div>
+          ) : (
+            // Teacher and students alike: every open tab (main lesson +
+            // any group boards) stays mounted so switching between them is
+            // instant and never loses in-progress edits.
             tabs.map((tab) => {
               const isActive = tab.id === activeTabId;
               return (
@@ -504,26 +546,24 @@ function LiveRoom() {
                     isActive={isActive}
                     onReady={isActive ? (api) => { saveApiRef.current = api; } : undefined}
                     liveSync={session.status === "active"}
-                    liveOwner={isLiveOwner}
-                    readOnly={isReadOnly}
+                    liveOwner={
+                      isTeacher
+                        ? isLiveOwner
+                        : tab.kind === "collab"
+                          ? true // any group member can co-edit with their groupmates
+                          : studentHasEditOnMain
+                    }
+                    readOnly={
+                      isTeacher
+                        ? isReadOnly
+                        : session.status === "ended" ||
+                          session.status === "paused" ||
+                          (tab.kind === "collab" ? false : !studentHasEditOnMain)
+                    }
                   />
                 </div>
               );
             })
-          ) : (
-            // Students: exactly one board, always current — no tabs to manage.
-            <div className="absolute inset-0">
-              <CanvasStage
-                mapId={studentBoardId}
-                tool={tool}
-                setTool={setTool}
-                isActive
-                onReady={(api) => { saveApiRef.current = api; }}
-                liveSync={session.status === "active"}
-                liveOwner={isLiveOwner}
-                readOnly={isReadOnly}
-              />
-            </div>
           )}
           </div>
         </div>
