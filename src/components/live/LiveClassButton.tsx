@@ -18,6 +18,7 @@ import {
   joinLiveSessionDirect,
   notifyOnlineUsers,
   subscribeActiveSession,
+  subscribeTeacherSession,
   type LiveSession,
 } from "@/lib/live-sessions";
 import { Button } from "@/components/ui/button";
@@ -45,6 +46,19 @@ function useActiveSession(): LiveSession | null | undefined {
   return session;
 }
 
+/** The signed-in teacher's own session (active OR paused). Distinct from
+ *  useActiveSession, which only sees status === "active" and would miss a
+ *  paused session entirely — leaving a refreshed teacher with no way back
+ *  in except accidentally starting a duplicate. */
+function useMyTeacherSession(uid: string | undefined): LiveSession | null | undefined {
+  const [session, setSession] = useState<LiveSession | null | undefined>(undefined);
+  useEffect(() => {
+    if (!uid) { setSession(null); return; }
+    return subscribeTeacherSession(uid, setSession);
+  }, [uid]);
+  return session;
+}
+
 export function LiveClassButton() {
   const { user, profile } = useAuth();
   const isTeacher = profile?.role === "teacher" || profile?.role === "therapist";
@@ -60,7 +74,7 @@ export function LiveClassButton() {
 
   if (!user || !profile) return null;
   return isTeacher ? (
-    <TeacherButton session={session} teacherInRoom={teacherInRoom} />
+    <TeacherButton session={session} />
   ) : (
     <StudentButton session={session} teacherInRoom={teacherInRoom} />
   );
@@ -69,10 +83,8 @@ export function LiveClassButton() {
 // ── Teacher variant ────────────────────────────────────────────────
 function TeacherButton({
   session,
-  teacherInRoom,
 }: {
   session: LiveSession | null | undefined;
-  teacherInRoom: boolean;
 }) {
   const { user, profile } = useAuth();
   const navigate = useNavigate();
@@ -81,7 +93,12 @@ function TeacherButton({
   const [title, setTitle] = useState("");
   const [busy, setBusy] = useState(false);
 
-  const myActiveSession = session && session.teacherId === user?.uid ? session : null;
+  const myActiveSession = useMyTeacherSession(user?.uid);
+  const teacherInRoom = useMemo(() => {
+    if (!myActiveSession || !user) return false;
+    const p = presence[user.uid];
+    return myActiveSession.status === "active" && !!p && p.state === "online" && p.currentSessionId === myActiveSession.id;
+  }, [myActiveSession, presence, user]);
 
   const start = async () => {
     if (!user || !profile || !title.trim()) return;
@@ -111,6 +128,7 @@ function TeacherButton({
   };
 
   // A session already exists that this teacher owns — button re-enters it.
+  // If it's paused, entering the /live/$sessionId route auto-resumes it.
   if (myActiveSession) {
     return (
       <Button
@@ -124,6 +142,11 @@ function TeacherButton({
           <span className="ml-1 inline-flex items-center gap-1 rounded-full bg-white/20 px-2 py-0.5 text-[10px] font-bold tracking-wide">
             <span className="h-1.5 w-1.5 rounded-full bg-red-500 animate-pulse" />
             LIVE
+          </span>
+        )}
+        {myActiveSession.status === "paused" && (
+          <span className="ml-1 rounded-full bg-white/20 px-2 py-0.5 text-[10px] font-bold tracking-wide">
+            ⏸ Συνέχεια
           </span>
         )}
       </Button>
