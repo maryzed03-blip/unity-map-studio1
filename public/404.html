@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="el">
+  <head>
+    <meta charset="utf-8" />
+    <title>Loading…</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!--
+      Fallback for shared hosts that disable .htaccess overrides
+      (AllowOverride None). Apache will serve this file for any unmatched
+      URL; we redirect to index.html with the original path preserved in the
+      hash, so the TanStack client router can resolve it after hydration.
+      Φεντράρισμα για hosts που δεν επιτρέπουν .htaccess overrides.
+    -->
+    <script>
+      (function () {
+        try {
+          var path = window.location.pathname + window.location.search;
+          // Determine the app base by stripping anything after the last "/"
+          // when the file is being served from somewhere like
+          // /unity-map-studio/some/route -> base = /unity-map-studio/
+          // This is a best-effort fallback only; the .htaccess rule is the
+          // canonical solution.
+          var base = "/";
+          var marker = path.lastIndexOf("/");
+          if (marker > 0) base = path.substring(0, marker + 1);
+          window.location.replace(base + "index.html");
+        } catch (e) {
+          window.location.replace("/");
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <p>Loading…</p>
+  </body>
+</html>

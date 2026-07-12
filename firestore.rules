@@ -1,0 +1,223 @@
+rules_version = '2';
+// Firestore security rules for Unity Map Studio.
+// Data model lives in src/lib/projects.ts, src/lib/live-sessions.ts,
+// and src/lib/auth-context.tsx. Keep these rules in sync with that code.
+//
+// Roles are stored on users/{uid}.role — `student | teacher | therapist`.
+// Role is set at signup and MUST NOT be changed by the user afterwards
+// (a separate trusted path / admin tool must mutate it).
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    function isSelf(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    // ── users/{uid} ───────────────────────────────────────────────
+    // Any signed-in user can read profiles (needed to display names /
+    // roles in live sessions and invitations). Only the owner can
+    // write, and the `role` field is immutable after creation.
+    match /users/{uid} {
+      allow read: if isSignedIn();
+
+      allow create: if isSelf(uid)
+        && request.resource.data.uid == uid;
+
+      allow update: if isSelf(uid)
+        && (!('role' in request.resource.data)
+            || request.resource.data.role == resource.data.role);
+
+      allow delete: if false;
+
+      // Per-user private subcollection (e.g. OpenAI API key).
+      // ONLY the owning user can read or write — no one else.
+      match /private/{docId} {
+        allow read, write: if isSelf(uid);
+      }
+    }
+
+    // ── projects/{projectId} ─────────────────────────────────────
+    function projectDoc(pid) {
+      return get(/databases/$(database)/documents/projects/$(pid)).data;
+    }
+    function isProjectOwner(pid) {
+      return isSignedIn() && projectDoc(pid).ownerId == request.auth.uid;
+    }
+    function isProjectMember(pid) {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/projects/$(pid)/members/$(request.auth.uid));
+    }
+
+    match /projects/{projectId} {
+      allow read: if isSignedIn()
+        && (resource.data.ownerId == request.auth.uid || isProjectMember(projectId));
+
+      allow create: if isSignedIn()
+        && request.resource.data.ownerId == request.auth.uid;
+
+      allow update: if isSignedIn()
+        && resource.data.ownerId == request.auth.uid
+        && request.resource.data.ownerId == resource.data.ownerId;
+
+      allow delete: if isSignedIn()
+        && resource.data.ownerId == request.auth.uid;
+
+      // ── members subcollection ──
+      // Only the project owner manages membership. A member may read
+      // (not write) their own membership doc.
+      match /members/{memberUid} {
+        allow read: if isSignedIn()
+          && (isProjectOwner(projectId) || request.auth.uid == memberUid);
+        allow write: if isProjectOwner(projectId);
+      }
+
+      // ── snapshots subcollection ──
+      match /snapshots/{snapshotId} {
+        allow read, write: if isProjectOwner(projectId) || isProjectMember(projectId);
+      }
+    }
+
+    // ── liveSessions/{sessionId} ─────────────────────────────────
+    function sessionDoc(sid) {
+      return get(/databases/$(database)/documents/liveSessions/$(sid)).data;
+    }
+    function isSessionTeacher(sid) {
+      return isSignedIn() && sessionDoc(sid).teacherId == request.auth.uid;
+    }
+    function isSessionParticipant(sid) {
+      return isSignedIn()
+        && request.auth.uid in sessionDoc(sid).participantIds;
+    }
+
+    match /liveSessions/{sessionId} {
+      allow read: if isSignedIn()
+        && (resource.data.teacherId == request.auth.uid
+            || request.auth.uid in resource.data.participantIds);
+
+      allow create: if isSignedIn()
+        && request.resource.data.teacherId == request.auth.uid;
+
+      // Teacher has full write. Otherwise, an existing participant
+      // accepting an invitation may append themselves to participantIds
+      // (and change nothing else).
+      allow update: if isSignedIn() && (
+        resource.data.teacherId == request.auth.uid
+        || (
+          request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['participantIds'])
+          && request.resource.data.participantIds.hasAll(resource.data.participantIds)
+          && (request.resource.data.participantIds.toSet()
+                .difference(resource.data.participantIds.toSet()))
+                == [request.auth.uid].toSet()
+        )
+      );
+
+      allow delete: if isSignedIn()
+        && resource.data.teacherId == request.auth.uid;
+
+      // ── groupRooms subcollection ──
+      match /groupRooms/{roomId} {
+        allow read: if isSessionTeacher(sessionId) || isSessionParticipant(sessionId);
+        allow write: if isSessionTeacher(sessionId);
+      }
+    }
+
+    // ── workspaceRooms/{roomId} ───────────────────────────────────
+    // Public, standalone co-working spaces (data model in
+    // src/lib/workspaces-rooms.ts). Anyone signed in can see and enter/leave
+    // them; only the mutable occupancy/token fields may change on update —
+    // structural fields (name, boardId) are fixed after bootstrap.
+    function userRole() {
+      return isSignedIn()
+        ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role
+        : null;
+    }
+    function isTeacherOrTherapist() {
+      return userRole() == 'teacher' || userRole() == 'therapist';
+    }
+
+    match /workspaceRooms/{roomId} {
+      allow read: if isSignedIn();
+
+      // Bootstrap only — creates the fixed set of room docs once.
+      allow create: if isTeacherOrTherapist();
+
+      allow update: if isSignedIn()
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly([
+               'occupants', 'teacherOccupants', 'occupantNames',
+               'tokenHolder', 'tokenRequesterId', 'tokenRequesterName',
+               'tokenRequestedAt', 'lastActivityAt', 'sessionParticipants',
+               'activeSessionId',
+             ]);
+
+      allow delete: if false;
+    }
+
+    // ── receivedDesigns/{designId} ────────────────────────────────
+    // "Στείλε το σχέδιο" — a one-way copy notification. Only the two
+    // parties involved can see it; only the recipient may flip its status.
+    match /receivedDesigns/{designId} {
+      allow read: if isSignedIn()
+        && (resource.data.fromUserId == request.auth.uid
+            || resource.data.toUserId == request.auth.uid);
+
+      allow create: if isSignedIn()
+        && request.resource.data.fromUserId == request.auth.uid;
+
+      allow update: if isSignedIn()
+        && resource.data.toUserId == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']);
+
+      allow delete: if isSignedIn()
+        && (resource.data.fromUserId == request.auth.uid
+            || resource.data.toUserId == request.auth.uid);
+    }
+
+    // ── invitations/{invitationId} ───────────────────────────────
+    // Only the two parties can see an invitation. The recipient may
+    // only flip its `status` field; the sender controls everything else.
+    match /invitations/{invitationId} {
+      allow read: if isSignedIn()
+        && (resource.data.fromUserId == request.auth.uid
+            || resource.data.toUserId == request.auth.uid);
+
+      allow create: if isSignedIn()
+        && request.resource.data.fromUserId == request.auth.uid;
+
+      allow update: if isSignedIn() && (
+        resource.data.fromUserId == request.auth.uid
+        || (
+          resource.data.toUserId == request.auth.uid
+          && request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['status'])
+        )
+      );
+
+      allow delete: if isSignedIn()
+        && resource.data.fromUserId == request.auth.uid;
+    }
+
+    // ── folders/{folderId} ───────────────────────────────────────
+    // Stage 6: personal/private project folders. No sharing semantics.
+    // Owner-only read/write, mirroring the projects ownership pattern.
+    match /folders/{folderId} {
+      allow read: if isSignedIn()
+        && resource.data.ownerId == request.auth.uid;
+
+      allow create: if isSignedIn()
+        && request.resource.data.ownerId == request.auth.uid;
+
+      allow update: if isSignedIn()
+        && resource.data.ownerId == request.auth.uid
+        && request.resource.data.ownerId == resource.data.ownerId;
+
+      allow delete: if isSignedIn()
+        && resource.data.ownerId == request.auth.uid;
+    }
+  }
+}
