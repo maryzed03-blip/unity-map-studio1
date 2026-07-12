@@ -600,7 +600,7 @@ export function CanvasStage({
       onSaveStatusChange?.("saved");
     }, 2000);
     return () => clearTimeout(t);
-  }, [state, hydrated, mapId, onSaveStatusChange, liveSync, liveOwner]);
+  }, [state, hydrated, mapId, onSaveStatusChange, liveSync, liveOwner, isActive]);
 
   // ── Live board sync (polling, NOT onSnapshot) ─────────────────────
   // 2s poll for live sessions (real-time feel), 8s for solo boards.
@@ -657,7 +657,7 @@ export function CanvasStage({
       window.clearInterval(id);
       window.clearTimeout(initial);
     };
-  }, [liveSync, hydrated, mapId]);
+  }, [liveSync, hydrated, mapId, isActive]);
 
   // ── Live micro-autosave (owner only) ─────────────────────────────────
   useEffect(() => {
