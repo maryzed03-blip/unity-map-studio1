@@ -7,14 +7,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/lib/auth-context";
 import { subscribePresence, type PresenceMap } from "@/lib/presence";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { subscribeRooms, moveStudentToRoom as moveStudentToWorkspaceRoom, type WorkspaceRoom } from "@/lib/workspaces-rooms";
 import {
   type LiveSession,
   sendInvitation,
   endLiveSession,
   subscribeGroupRooms,
   createGroupRoom,
-  assignToGroup,
   removeFromGroup,
   deleteGroupRoom,
   joinGroupRoom,
@@ -66,6 +64,7 @@ import {
   DoorOpen,
   ChevronRight,
   ChevronLeft,
+  ChevronDown,
   Loader2,
   Crown,
   GraduationCap,
@@ -196,6 +195,10 @@ export function GroupRoomsPanel({
   const [newName, setNewName] = useState("");
   const [creating, setCreating] = useState(false);
   const [splitting, setSplitting] = useState(false);
+  const [quickCount, setQuickCount] = useState(2);
+  const [quickBusy, setQuickBusy] = useState(false);
+  const [expandedGroupId, setExpandedGroupId] = useState<string | null>(null);
+  const [addingUid, setAddingUid] = useState<string | null>(null);
 
   useEffect(() => subscribeGroupRooms(session.id, setGroups), [session.id]);
 
@@ -230,6 +233,39 @@ export function GroupRoomsPanel({
     finally { setSplitting(false); }
   };
 
+  // One-click flow: teacher just picks how many EMPTY groups they want (up
+  // to MAX_GROUP_ROOMS) and this creates them, auto-named. Splitting
+  // students into them is a deliberately separate step (either the
+  // "Αυτόματος διαχωρισμός" button below, or manual assignment per group).
+  const handleQuickCreate = async () => {
+    if (!user) return;
+    const room = MAX_GROUP_ROOMS - groups.length;
+    if (room <= 0) { toast.info(`Έχετε ήδη ${MAX_GROUP_ROOMS} ομάδες — το μέγιστο.`); return; }
+    const toCreate = Math.min(quickCount, room);
+    setQuickBusy(true);
+    try {
+      const existingNumbers = new Set(
+        groups.map((g) => Number(g.name.match(/^Ομάδα (\d+)$/)?.[1])).filter((n) => !Number.isNaN(n)),
+      );
+      let next = 1;
+      for (let i = 0; i < toCreate; i++) {
+        while (existingNumbers.has(next)) next++;
+        await createGroupRoom({
+          sessionId: session.id,
+          teacherId: user.uid,
+          name: `Ομάδα ${next}`,
+          workspaceType: session.workspaceType,
+        });
+        existingNumbers.add(next);
+      }
+      toast.success(`Δημιουργήθηκαν ${toCreate} ${toCreate === 1 ? "ομάδα" : "ομάδες"}`);
+    } catch {
+      toast.error("Αποτυχία δημιουργίας ομάδων");
+    } finally {
+      setQuickBusy(false);
+    }
+  };
+
   const handleJoin = async (group: GroupRoom) => {
     if (!user) return;
     try {
@@ -247,6 +283,22 @@ export function GroupRoomsPanel({
     catch { toast.error("Αποτυχία διαγραφής"); }
   };
 
+  // Teacher-driven manual assignment: online students not already in any
+  // group, shown when a group is expanded so the teacher can add them
+  // one by one. Once added, they disappear from every group's list here.
+  const groupedStudentIds = new Set(groups.flatMap((g) => g.participantIds));
+  const unassignedOnlineStudentIds = studentIds.filter(
+    (uid) => presence[uid]?.state === "online" && !groupedStudentIds.has(uid),
+  );
+
+  const handleManualAdd = async (group: GroupRoom, uid: string) => {
+    setAddingUid(uid);
+    try {
+      await joinGroupRoom(session.id, group.id, uid);
+    } catch { toast.error("Αποτυχία προσθήκης"); }
+    finally { setAddingUid(null); }
+  };
+
   return (
     <Card className="panel-soft p-3 space-y-2.5">
       <div className="flex items-center justify-between">
@@ -255,6 +307,32 @@ export function GroupRoomsPanel({
         </h3>
         <Users className="h-3.5 w-3.5 text-muted-foreground" />
       </div>
+
+      {isTeacher && (
+        <div className="rounded-lg border border-primary/20 bg-primary/5 p-2 space-y-1.5">
+          <p className="text-[10px] font-medium text-muted-foreground">Δημιουργία πολλών ομάδων μαζί</p>
+          <div className="flex items-center gap-1.5">
+            <select
+              value={quickCount}
+              onChange={(e) => setQuickCount(Number(e.target.value))}
+              className="h-7 text-xs flex-1 rounded-md border border-input bg-background px-2"
+            >
+              {Array.from({ length: MAX_GROUP_ROOMS }, (_, i) => i + 1).map((n) => (
+                <option key={n} value={n}>{n} {n === 1 ? "ομάδα" : "ομάδες"}</option>
+              ))}
+            </select>
+            <Button
+              size="sm"
+              className="h-7 text-xs gap-1 shrink-0"
+              onClick={handleQuickCreate}
+              disabled={quickBusy || groups.length >= MAX_GROUP_ROOMS}
+            >
+              <Plus className="h-3.5 w-3.5" />
+              {quickBusy ? "…" : "Δημιουργία"}
+            </Button>
+          </div>
+        </div>
+      )}
 
       {isTeacher && (
         <div className="flex gap-1.5">
@@ -316,6 +394,19 @@ export function GroupRoomsPanel({
                     <Badge variant="secondary" className="text-[10px] h-5">
                       {group.participantIds.length}
                     </Badge>
+                    {isTeacher && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-5 w-5 p-0 shrink-0"
+                        title="Χειροκίνητη προσθήκη μαθητών"
+                        onClick={() => setExpandedGroupId((cur) => (cur === group.id ? null : group.id))}
+                      >
+                        {expandedGroupId === group.id
+                          ? <ChevronDown className="h-3.5 w-3.5" />
+                          : <ChevronRight className="h-3.5 w-3.5" />}
+                      </Button>
+                    )}
                     {isTeacher ? (
                       <Button
                         size="sm"
@@ -392,40 +483,38 @@ export function GroupRoomsPanel({
                     ))}
                   </div>
                 )}
+                {isTeacher && expandedGroupId === group.id && (
+                  <div className="mt-1.5 pt-1.5 border-t border-border/60 space-y-1">
+                    <p className="text-[10px] text-muted-foreground">Online μαθητές χωρίς ομάδα:</p>
+                    {unassignedOnlineStudentIds.length === 0 ? (
+                      <p className="text-[10px] text-muted-foreground italic">Κανείς διαθέσιμος αυτή τη στιγμή.</p>
+                    ) : (
+                      <ul className="space-y-1">
+                        {unassignedOnlineStudentIds.map((uid) => (
+                          <li key={uid} className="flex items-center gap-1.5">
+                            <span className="h-1.5 w-1.5 rounded-full bg-[color:var(--success)] shrink-0" />
+                            <span className="text-xs flex-1 truncate">{nameFor(uid)}</span>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-5 px-1.5 text-[10px] gap-1"
+                              disabled={addingUid === uid}
+                              onClick={() => handleManualAdd(group, uid)}
+                            >
+                              <Plus className="h-3 w-3" /> Προσθήκη
+                            </Button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
               </li>
             );
           })}
         </ul>
       )}
 
-      {isTeacher && groups.length > 0 && (() => {
-        const unassigned = studentIds.filter((uid) => !groups.some((g) => g.participantIds.includes(uid)));
-        if (unassigned.length === 0) return null;
-        return (
-          <div className="pt-1 border-t border-border">
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground mb-1.5">
-              Χωρίς ομάδα ({unassigned.length})
-            </p>
-            <ul className="space-y-1">
-              {unassigned.map((uid) => (
-                <li key={uid} className="flex items-center gap-1.5 text-xs">
-                  <span className="flex-1 truncate">{nameFor(uid)}</span>
-                  <Select onValueChange={(gid) => assignToGroup(session.id, gid, uid).catch(() => {})}>
-                    <SelectTrigger className="h-6 w-28 text-[10px] px-1.5 shrink-0">
-                      <SelectValue placeholder="Ανάθεση σε…" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {groups.map((g) => (
-                        <SelectItem key={g.id} value={g.id} className="text-xs">{g.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </li>
-              ))}
-            </ul>
-          </div>
-        );
-      })()}
 
       {!isTeacher && myGroup && (
         <p className="text-[10px] text-primary font-medium">
@@ -433,42 +522,6 @@ export function GroupRoomsPanel({
         </p>
       )}
     </Card>
-  );
-}
-
-// ---------- WorkspaceRoomMoveSelect — move student to workspace room ----------
-
-function WorkspaceRoomMoveSelect({ uid }: { uid: string }) {
-  const [wsRooms, setWsRooms] = useState<WorkspaceRoom[]>([]);
-  useEffect(() => subscribeRooms(setWsRooms), []);
-
-  const handleMove = async (targetRoomId: string) => {
-    const targetRoom = wsRooms.find((r) => r.id === targetRoomId);
-    if (!targetRoom) return;
-    // Find student's display name from any room
-    const name = wsRooms.flatMap((r) => Object.entries(r.occupantNames))
-      .find(([id]) => id === uid)?.[1] ?? uid.slice(0, 6);
-    try {
-      await moveStudentToWorkspaceRoom(uid, name, targetRoomId, wsRooms);
-      toast.success(`Μεταφέρθηκε στον ${targetRoom.name}`);
-    } catch { toast.error("Αποτυχία μεταφοράς"); }
-  };
-
-  const currentRoom = wsRooms.find((r) => r.occupants.includes(uid));
-
-  return (
-    <Select value={currentRoom?.id ?? ""} onValueChange={handleMove}>
-      <SelectTrigger className="h-6 text-xs w-28 shrink-0">
-        <SelectValue placeholder="→ Χώρος" />
-      </SelectTrigger>
-      <SelectContent>
-        {wsRooms.map((r) => (
-          <SelectItem key={r.id} value={r.id} className="text-xs">
-            {r.name} ({r.occupants.length}/5)
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
   );
 }
 
@@ -585,8 +638,6 @@ export function TeacherSessionPanel({
                   <span className={`text-[10px] px-1.5 py-0.5 rounded shrink-0 ${hasEdit ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground"}`}>
                     {hasEdit ? "✏️ Επεξ." : "👁 Θέαση"}
                   </span>
-                  {/* Move to workspace room */}
-                  <WorkspaceRoomMoveSelect uid={uid} />
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <Button variant="ghost" size="sm" className="h-6 w-6 p-0 shrink-0">
