@@ -603,7 +603,18 @@ export function TeacherSessionPanel({
         <Crown className="h-4 w-4 text-primary" />
         <span className="text-sm font-semibold">Πάνελ Καθηγητή</span>
         {session.presentingBoardId && (
-          <Badge variant="default" className="text-[10px] h-4 px-1 ml-auto animate-pulse">ΠΑΡΟΥΣΙΑΣΗ</Badge>
+          <>
+            <Badge variant="default" className="text-[10px] h-4 px-1 ml-auto animate-pulse">ΠΑΡΟΥΣΙΑΣΗ</Badge>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-5 px-1.5 text-[10px] text-destructive"
+              title="Διακοπή παρουσίασης — σταματά ό,τι βλέπουν όλοι οι μαθητές να επιβάλλεται"
+              onClick={() => setPresentingBoard(session.id, null).catch(() => {})}
+            >
+              Διακοπή
+            </Button>
+          </>
         )}
       </div>
 
