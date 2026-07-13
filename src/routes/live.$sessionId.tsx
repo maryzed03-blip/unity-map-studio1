@@ -22,7 +22,6 @@ import {
 import { CanvasStage } from "@/components/canvas/CanvasStage";
 import { CanvasToolbar } from "@/components/canvas/Toolbar";
 import { CanvasTabs, type CanvasTab } from "@/components/canvas/CanvasTabs";
-import { GlobalTabBar } from "@/components/canvas/GlobalTabBar";
 import type { ToolId } from "@/lib/workspaces";
 import { subscribeGroupRooms, type GroupRoom } from "@/lib/live-sessions";
 import {
@@ -439,15 +438,10 @@ function LiveRoom() {
         </div>
       )}
 
-      {/* Global persistent tab bar */}
-      <GlobalTabBar
-        currentMapId={tabs.find((t) => t.id === activeTabId)?.mapId}
-        onTabSwitch={(mapId, kind) => {
-          // If switching to a local tab (collab room), update activeTabId
-          const localTab = tabs.find((t) => t.mapId === mapId);
-          if (localTab) setActiveTabId(localTab.id);
-        }}
-      />
+      {/* Global persistent tab bar intentionally omitted here — inside a
+          live session, CanvasTabs below already covers switching between
+          the main lesson and any group boards. Showing both stacked one
+          above the other was redundant and confusing. */}
 
       {/* Tab bar — main lesson + any group boards opened. Now shared by
           teacher and students alike (students: main + their own group, if
@@ -582,7 +576,7 @@ function LiveRoom() {
               <StudentSessionPanel
                 session={session}
                 currentTabLabel={
-                  isPresentationMode ? "Παρουσίαση" : myGroup ? `Ομάδα «${myGroup.name}»` : "Ζωντανό Μάθημα"
+                  isPresentationMode ? "Παρουσίαση" : activeTab?.kind === "collab" ? activeTab.label : "Ζωντανό Μάθημα"
                 }
               />
               <div className="border-t border-border pt-3 mt-1">
