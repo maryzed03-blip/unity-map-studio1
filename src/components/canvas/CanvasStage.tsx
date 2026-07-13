@@ -619,7 +619,10 @@ export function CanvasStage({
 
     const tick = async (forceLoad = false) => {
       if (cancelled) return;
-      if (!isActive) return; // background tab — skip poll
+      // NOTE: deliberately NOT gated on `isActive` — every mounted tab
+      // (main lesson + every open group board) keeps syncing in the
+      // background, not just whichever one is currently visible. Switching
+      // tabs should never mean "missed the last two minutes of updates".
       if (typeof document !== "undefined" && document.hidden) return;
       if (pointerDownRef.current && !forceLoad) return;
       try {
@@ -657,7 +660,7 @@ export function CanvasStage({
       window.clearInterval(id);
       window.clearTimeout(initial);
     };
-  }, [liveSync, hydrated, mapId, isActive]);
+  }, [liveSync, hydrated, mapId]);
 
   // ── Live micro-autosave (owner only) ─────────────────────────────────
   useEffect(() => {
