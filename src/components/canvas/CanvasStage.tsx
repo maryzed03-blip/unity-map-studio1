@@ -1687,6 +1687,10 @@ export function CanvasStage({
                   });
                 }}
                 onMoveStart={(e, additive) => {
+                  if (readOnly) {
+                    e.stopPropagation();
+                    return;
+                  }
                   if (connectorMode) {
                     e.stopPropagation();
                     return;
