@@ -180,11 +180,15 @@ export function subscribeTeacherSession(
     const qs = snap as unknown as {
       docs: Array<{ id: string; data: () => Omit<LiveSession, "id"> }>;
     };
-    const row = qs.docs.find((d) => {
-      const status = d.data().status;
-      return status === "active" || status === "paused";
+    const rows = qs.docs
+      .map((d) => ({ id: d.id, ...d.data() }))
+      .filter((s) => s.status === "active" || s.status === "paused");
+    rows.sort((a, b) => {
+      const at = (a.updatedAt as { toMillis?: () => number } | undefined)?.toMillis?.() ?? 0;
+      const bt = (b.updatedAt as { toMillis?: () => number } | undefined)?.toMillis?.() ?? 0;
+      return bt - at;
     });
-    cb(row ? { id: row.id, ...row.data() } : null);
+    cb(rows[0] ?? null);
   });
 }
 
