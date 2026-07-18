@@ -2,7 +2,7 @@ import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAuth } from "@/lib/auth-context";
 import { ClientOnly } from "@/lib/client-only";
-import { subscribeSession, pauseSession, resumeSession, notifySessionPaused, activateAndNotifyAll, type LiveSession } from "@/lib/live-sessions";
+import { subscribeSession, pauseSession, resumeSession, notifySessionPaused, type LiveSession } from "@/lib/live-sessions";
 import { setCurrentSession } from "@/lib/presence";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -292,17 +292,24 @@ function LiveRoom() {
       if (myGroup) {
         toast.success(`Είστε στην ομάδα «${myGroup.name}»`, { duration: 5000 });
         openRoomTab(myGroup.id, myGroup.boardId, `👥 ${myGroup.name}`);
-      } else if (hasNotifiedOnceRef.current) {
-        toast.info("Βγήκατε από την ομάδα", { duration: 3000 });
-        // Their group tab no longer applies — drop it and land back on
-        // the main lesson tab.
-        const prevGroupId = lastNotifiedGroupRef.current;
-        if (prevGroupId) closeTab(`room-${prevGroupId}`);
+        // Reassignment: drop any OTHER stale collab tab (e.g. their
+        // previous group) so it can't linger around still editable —
+        // openRoomTab above already made the new group's tab active.
+        setTabs((prev) => prev.filter((t) => t.kind !== "collab" || t.mapId === myGroup.boardId));
+      } else {
+        if (hasNotifiedOnceRef.current) toast.info("Βγήκατε από την ομάδα", { duration: 3000 });
+        // Left every group — drop any lingering collab tab and, if that
+        // was the tab being viewed, fall back to the main lesson.
+        setTabs((prev) => {
+          const stillActive = prev.some((t) => t.id === activeTabId && t.kind === "collab");
+          if (stillActive) setActiveTabId("main");
+          return prev.filter((t) => t.kind !== "collab");
+        });
       }
       lastNotifiedGroupRef.current = myGroupId;
       hasNotifiedOnceRef.current = true;
     }
-  }, [groups, user, isTeacher, openRoomTab, closeTab]);
+  }, [groups, user, isTeacher, openRoomTab]);
 
   // Guard conditions — all hooks must be above these
   if (session === undefined) return <div className="min-h-screen flex items-center justify-center"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>;
@@ -543,7 +550,7 @@ function LiveRoom() {
                     liveOwner={
                       isTeacher
                         ? isLiveOwner
-                        : tab.kind === "collab"
+                        : tab.kind === "collab" && tab.mapId === myGroup?.boardId
                           ? true // any group member can co-edit with their groupmates
                           : studentHasEditOnMain
                     }
@@ -552,7 +559,7 @@ function LiveRoom() {
                         ? isReadOnly
                         : session.status === "ended" ||
                           session.status === "paused" ||
-                          (tab.kind === "collab" ? false : !studentHasEditOnMain)
+                          (tab.kind === "collab" && tab.mapId === myGroup?.boardId ? false : !studentHasEditOnMain)
                     }
                   />
                 </div>
