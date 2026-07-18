@@ -40,6 +40,7 @@ import {
 import { toast } from "sonner";
 import { exportPNG, exportSVG, exportJSON } from "@/lib/canvas/export";
 import { mapStore } from "@/lib/canvas/storage";
+import { QuotaWarningSurface } from "@/components/QuotaWarningSurface";
 
 // ── Route ──────────────────────────────────────────────────────────────
 
@@ -593,6 +594,7 @@ function LiveRoom() {
           )}
         </CollapsibleLivePanel>
       </div>
+      <QuotaWarningSurface />
     </div>
   );
 }
