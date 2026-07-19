@@ -2,12 +2,32 @@ import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAuth } from "@/lib/auth-context";
 import { ClientOnly } from "@/lib/client-only";
-import { subscribeSession, pauseSession, resumeSession, notifySessionPaused, type LiveSession } from "@/lib/live-sessions";
+import {
+  subscribeSession,
+  pauseSession,
+  resumeSession,
+  notifySessionPaused,
+  endSessionAndSave,
+  setPresentingBoard,
+  recordGroupJoin,
+  recordGroupLeave,
+  markGroupContribution,
+  type LiveSession,
+} from "@/lib/live-sessions";
 import { setCurrentSession } from "@/lib/presence";
+import { startBroadcast, stopBroadcast } from "@/lib/live-broadcast";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
+import {
   ArrowLeft,
+  PauseCircle,
   Loader2,
   Radio,
   Save,
@@ -40,6 +60,10 @@ import {
 import { toast } from "sonner";
 import { exportPNG, exportSVG, exportJSON } from "@/lib/canvas/export";
 import { mapStore } from "@/lib/canvas/storage";
+import { createProjectFromObjects } from "@/lib/projects";
+import { insertObjectsIntoBoard } from "@/lib/canvas/insert-into-board";
+import { SelectionActionsBar, type SendTarget } from "@/components/canvas/SelectionActionsBar";
+import type { CanvasObject } from "@/lib/canvas/types";
 import { QuotaWarningSurface } from "@/components/QuotaWarningSurface";
 
 // ── Route ──────────────────────────────────────────────────────────────
@@ -139,12 +163,16 @@ function EndedSessionBar({ session }: { session: LiveSession }) {
 
 function LiveRoom() {
   const { sessionId } = Route.useParams();
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
+  const navigate = useNavigate();
   const [session, setSession] = useState<LiveSession | null | undefined>(undefined);
   const [tool, setTool] = useState<ToolId>("select");
   const [showBanner, setShowBanner] = useState(true);
   const [groups, setGroups] = useState<GroupRoom[]>([]);
   const [manualSaving, setManualSaving] = useState(false);
+  const [leaveChoiceOpen, setLeaveChoiceOpen] = useState(false);
+  const [selectedObjects, setSelectedObjects] = useState<CanvasObject[]>([]);
+  const [leaveBusy, setLeaveBusy] = useState<"pause" | "end" | null>(null);
   const saveApiRef = useRef<{ save: () => Promise<void> } | null>(null);
 
   // Tab system — each tab has its own mapId
@@ -162,6 +190,24 @@ function LiveRoom() {
     try { setCurrentSession(sessionId); } catch { /**/ }
     return () => { try { setCurrentSession(null); } catch { /**/ } };
   }, [sessionId]);
+
+  // The single, unambiguous "is this class live right now" signal (see
+  // live-broadcast.ts). Broadcasts exactly while the teacher's own
+  // browser has this session open AND its status is "active" — cleared
+  // automatically by this effect's own cleanup the moment either stops
+  // being true (paused, ended, navigated away), and by RTDB's
+  // onDisconnect if the browser just closes/crashes.
+  useEffect(() => {
+    if (!session || !user || user.uid !== session.teacherId) return;
+    if (session.status !== "active") return;
+    startBroadcast({
+      sessionId: session.id,
+      teacherId: user.uid,
+      teacherName: session.teacherName,
+      title: session.title,
+    });
+    return () => stopBroadcast();
+  }, [session?.id, session?.status, user?.uid, session?.teacherId, session?.teacherName, session?.title]);
 
   useEffect(() => {
     return subscribeSession(sessionId, (s) => {
@@ -285,11 +331,13 @@ function LiveRoom() {
   // boards — instead of silently swapping their one-and-only canvas.
   const lastNotifiedGroupRef = useRef<string | null>(null);
   const hasNotifiedOnceRef = useRef(false);
+  const contributedGroupsRef = useRef(new Set<string>());
   useEffect(() => {
     if (!user || isTeacher) return;
     const myGroup = groups.find((g) => g.participantIds.includes(user.uid));
     const myGroupId = myGroup?.id ?? null;
     if (myGroupId !== lastNotifiedGroupRef.current) {
+      const prevGroupId = lastNotifiedGroupRef.current;
       if (myGroup) {
         toast.success(`Είστε στην ομάδα «${myGroup.name}»`, { duration: 5000 });
         openRoomTab(myGroup.id, myGroup.boardId, `👥 ${myGroup.name}`);
@@ -297,6 +345,8 @@ function LiveRoom() {
         // previous group) so it can't linger around still editable —
         // openRoomTab above already made the new group's tab active.
         setTabs((prev) => prev.filter((t) => t.kind !== "collab" || t.mapId === myGroup.boardId));
+        recordGroupJoin(sessionId, myGroup.id, user.uid, profile?.displayName ?? "Μαθητής").catch(() => {});
+        if (prevGroupId) recordGroupLeave(sessionId, prevGroupId, user.uid).catch(() => {});
       } else {
         if (hasNotifiedOnceRef.current) toast.info("Βγήκατε από την ομάδα", { duration: 3000 });
         // Left every group — drop any lingering collab tab and, if that
@@ -306,11 +356,12 @@ function LiveRoom() {
           if (stillActive) setActiveTabId("main");
           return prev.filter((t) => t.kind !== "collab");
         });
+        if (prevGroupId) recordGroupLeave(sessionId, prevGroupId, user.uid).catch(() => {});
       }
       lastNotifiedGroupRef.current = myGroupId;
       hasNotifiedOnceRef.current = true;
     }
-  }, [groups, user, isTeacher, openRoomTab]);
+  }, [groups, user, profile, isTeacher, openRoomTab, sessionId]);
 
   // Guard conditions — all hooks must be above these
   if (session === undefined) return <div className="min-h-screen flex items-center justify-center"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>;
@@ -325,9 +376,6 @@ function LiveRoom() {
 
   const activeTab = tabs.find((t) => t.id === activeTabId);
 
-  // Presentation mode: students see the presented board read-only
-  const isPresentationMode = !isTeacher && !!session.presentingBoardId;
-
   // Students are read-only on the main live board UNLESS teacher granted edit permission
   const studentHasEditOnMain = !isTeacher && (session.editPermissions ?? []).includes(user?.uid ?? "");
 
@@ -338,12 +386,13 @@ function LiveRoom() {
   // click between them like the teacher does.
   const myGroup = !isTeacher ? groups.find((g) => g.participantIds.includes(user?.uid ?? "")) : undefined;
 
-  const studentOnGroupTab = !isPresentationMode && activeTab?.kind === "collab";
+  const studentOnGroupTab = activeTab?.kind === "collab";
   const studentIsShowingOwnGroup = studentOnGroupTab;
-  const studentIsShowingMain = !isPresentationMode && !studentOnGroupTab;
-  // Presentation mode always overrides whatever tab a student has open —
-  // it's a broadcast from the teacher, not a personal navigation choice.
-  const studentBoardId = session.presentingBoardId || activeTab?.mapId || session.mainBoardId;
+  const studentIsShowingMain = !studentOnGroupTab;
+  // True while THIS student is looking at the "main" tab and the teacher
+  // has transferred the live lesson into a group — the board they're
+  // seeing is that group's, mirrored read-only.
+  const isViewingMirroredMain = activeTab?.id === "main" && !!session.presentingBoardId;
 
   // For the TEACHER, tabs still apply (main + any group boards they've
   // opened to check in on). "collab" tabs are teacher-only navigation now.
@@ -352,8 +401,8 @@ function LiveRoom() {
     : undefined;
 
   const isLiveOwner = isTeacher
-    ? true
-    : isPresentationMode
+    ? !isViewingMirroredMain // even the teacher can't edit the frozen mirror
+    : isViewingMirroredMain
       ? false
       : studentIsShowingOwnGroup
         ? true // any group member can co-edit with their groupmates
@@ -362,22 +411,135 @@ function LiveRoom() {
   const isReadOnly =
     session.status === "ended" ||
     session.status === "paused" ||
+    session.status === "ending" ||
+    isViewingMirroredMain ||
     (!isTeacher && !isLiveOwner);
+
+  // ── Selection actions bar (send to another board / new project) ────
+  // Teacher only: send selected objects to any OTHER open board (main or
+  // any group) besides the one they're currently looking at. Students
+  // don't get this — "new project from selection" below still works for
+  // everyone.
+  const sendTargets: SendTarget[] = isTeacher
+    ? [
+        ...(activeTab?.mapId !== session.mainBoardId
+          ? [{ id: "main", mapId: session.mainBoardId, label: "📚 Κεντρικό μάθημα" }]
+          : []),
+        ...groups
+          .filter((g) => g.boardId !== activeTab?.mapId)
+          .map((g) => ({ id: g.id, mapId: g.boardId, label: `👥 ${g.name}` })),
+      ]
+    : [];
+
+  const handleCreateNewProjectFromSelection = async (objects: CanvasObject[]) => {
+    if (!user) return;
+    const newId = await createProjectFromObjects(user.uid, `${session.title} (επιλογή)`, objects, session.workspaceType);
+    window.open(`/project/${newId}`, "_blank");
+  };
+
+  const handleSendSelectionTo = async (target: SendTarget, objects: CanvasObject[]) => {
+    await insertObjectsIntoBoard(target.mapId, objects);
+  };
+
+  const handlePauseAndLeave = async () => {
+    setLeaveBusy("pause");
+    try {
+      await pauseSession(session.id);
+      stopBroadcast();
+      await notifySessionPaused(session, session.teacherName).catch(() => {});
+      navigate({ to: "/lobby" });
+    } catch {
+      toast.error("Αποτυχία παύσης");
+      setLeaveBusy(null);
+    }
+  };
+
+  const handleEndAndLeave = async () => {
+    if (!user) return;
+    setLeaveBusy("end");
+    try {
+      const { ended, distributed, failed } = await endSessionAndSave(session.id, user.uid, profile?.displayName ?? "Καθηγητής");
+      if (!ended) {
+        toast.error(`Αποτυχία αποθήκευσης για ${failed.length} μαθητή/ές. Το μάθημα ΔΕΝ έκλεισε.`, {
+          description: failed.map((f) => `${f.groupName} → ${f.studentName}`).join(", "),
+          duration: 10000,
+        });
+        setLeaveBusy(null);
+        return;
+      }
+      toast.success(distributed > 0 ? `Το μάθημα έληξε οριστικά. ${distributed} σχέδια μοιράστηκαν στους μαθητές.` : "Το μάθημα έληξε οριστικά.");
+      stopBroadcast();
+      navigate({ to: "/lobby" });
+    } catch {
+      toast.error("Αποτυχία αποθήκευσης. Το μάθημα ΔΕΝ έκλεισε.");
+      setLeaveBusy(null);
+    }
+  };
 
   return (
     <div className="h-screen flex flex-col bg-background overflow-hidden">
       {/* Header */}
       <header className="h-14 border-b border-border bg-surface flex items-center justify-between px-4 shrink-0 z-10">
         <div className="flex items-center gap-3 min-w-0">
-          <Button asChild variant="ghost" size="sm" className="gap-2 shrink-0">
-            <Link to="/lobby"><ArrowLeft className="h-4 w-4" />Lobby</Link>
-          </Button>
+          {isTeacher ? (
+            <Dialog open={leaveChoiceOpen} onOpenChange={setLeaveChoiceOpen}>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="gap-2 shrink-0"
+                onClick={() => setLeaveChoiceOpen(true)}
+              >
+                <ArrowLeft className="h-4 w-4" />Lobby
+              </Button>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Πριν φύγετε…</DialogTitle>
+                  <DialogDescription>
+                    Θέλετε να βάλετε το μάθημα σε παύση (το ξαναβρίσκετε ακριβώς όπως το αφήνετε), ή να το λήξετε οριστικά;
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="flex flex-col gap-2 pt-2">
+                  <Button
+                    variant="outline"
+                    className="w-full gap-2 justify-start"
+                    onClick={handlePauseAndLeave}
+                    disabled={leaveBusy !== null}
+                  >
+                    <PauseCircle className="h-4 w-4" />
+                    {leaveBusy === "pause" ? "Παύση…" : "Παύση Μαθήματος"}
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    className="w-full gap-2 justify-start"
+                    onClick={handleEndAndLeave}
+                    disabled={leaveBusy !== null}
+                  >
+                    <ArrowLeft className="h-4 w-4" />
+                    {leaveBusy === "end" ? "Αποθήκευση και Λήξη…" : "Οριστική Λήξη"}
+                  </Button>
+                </div>
+              </DialogContent>
+            </Dialog>
+          ) : (
+            <Button asChild variant="ghost" size="sm" className="gap-2 shrink-0">
+              <Link to="/lobby"><ArrowLeft className="h-4 w-4" />Lobby</Link>
+            </Button>
+          )}
           <div className="h-5 w-px bg-border shrink-0" />
           <div className="flex items-center gap-2 min-w-0">
             <Radio className="h-4 w-4 text-[color:var(--success)] shrink-0 animate-pulse" />
             <span className="text-sm font-semibold truncate">{session.title}</span>
-            <Badge variant={session.status === "active" ? "default" : session.status === "paused" ? "outline" : "secondary"} className="shrink-0">
-              {session.status === "active" ? "Σε εξέλιξη" : session.status === "paused" ? "⏸ Διακοπή" : "Έληξε"}
+            <Badge
+              variant={session.status === "active" ? "default" : session.status === "paused" ? "outline" : session.status === "ending" ? "outline" : "secondary"}
+              className="shrink-0"
+            >
+              {session.status === "active"
+                ? "Σε εξέλιξη"
+                : session.status === "paused"
+                  ? "⏸ Διακοπή"
+                  : session.status === "ending"
+                    ? "🔒 Αποθήκευση…"
+                    : "Έληξε"}
             </Badge>
           </div>
         </div>
@@ -405,9 +567,35 @@ function LiveRoom() {
               Αποθήκευση
             </Button>
           )}
-          {session.presentingBoardId && !isTeacher && (
+          {isTeacher && activeTab?.kind === "collab" && (
+            session.presentingBoardId === activeTab.mapId ? (
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5 h-7 text-xs"
+                onClick={() => setPresentingBoard(session.id, null).catch(() => {})}
+              >
+                <MonitorPlay className="h-3.5 w-3.5" />
+                Επιστροφή στο ζωντανό μάθημα
+              </Button>
+            ) : (
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5 h-7 text-xs"
+                disabled={!!session.presentingBoardId}
+                title={session.presentingBoardId ? "Το μάθημα είναι ήδη μεταφερμένο σε άλλη ομάδα" : undefined}
+                onClick={() => activeTab && setPresentingBoard(session.id, activeTab.mapId).catch(() => {})}
+              >
+                <MonitorPlay className="h-3.5 w-3.5" />
+                Μεταφορά ζωντανού μαθήματος εδώ
+              </Button>
+            )
+          )}
+          {session.presentingBoardId && (
             <span className="flex items-center gap-1.5 text-xs font-bold text-primary border border-primary/30 rounded px-2 py-0.5">
-              <MonitorPlay className="h-3.5 w-3.5" /> Παρουσίαση
+              <MonitorPlay className="h-3.5 w-3.5" />
+              Μεταφέρθηκε στην ομάδα «{groups.find((g) => g.boardId === session.presentingBoardId)?.name ?? "…"}»
             </span>
           )}
           <span className="hidden sm:flex items-center gap-1.5 text-xs font-bold tracking-widest uppercase text-[color:var(--success)] border border-[color:var(--success)] rounded px-2 py-0.5">
@@ -432,6 +620,19 @@ function LiveRoom() {
 
       {/* Ended bar */}
       {session.status === "ended" && <EndedSessionBar session={session} />}
+      {session.status === "ending" && (
+        <div className="shrink-0 border-b border-border bg-blue-50 dark:bg-blue-950/20 px-4 py-3 flex items-center gap-3">
+          <Loader2 className="h-4 w-4 animate-spin text-blue-700 dark:text-blue-300" />
+          <div>
+            <p className="text-sm font-semibold text-blue-800 dark:text-blue-200">
+              Το μάθημα ολοκληρώνεται
+            </p>
+            <p className="text-xs text-blue-700 dark:text-blue-300">
+              Αποθηκεύονται τα τελικά σχέδια. Δεν μπορείτε να κάνετε άλλες αλλαγές αυτή τη στιγμή.
+            </p>
+          </div>
+        </div>
+      )}
       {session.status === "paused" && !isTeacher && (
         <div className="shrink-0 border-b border-border bg-amber-50 dark:bg-amber-950/20 px-4 py-3 flex items-center gap-3">
           <span className="text-lg">⏸</span>
@@ -475,11 +676,11 @@ function LiveRoom() {
         {/* Canvas */}
         <div className="flex-1 relative overflow-hidden flex flex-col" style={{ minWidth: 0 }}>
           {/* Student banners — exactly one of these three applies at a time */}
-          {!isTeacher && session.status === "active" && isPresentationMode && (
+          {session.status === "active" && isViewingMirroredMain && (
             <div className="shrink-0 border-b border-border bg-primary/10 px-4 py-1.5 flex items-center gap-2">
               <MonitorPlay className="h-3.5 w-3.5 text-primary shrink-0" />
               <span className="text-xs text-primary font-medium">
-                Ο καθηγητής παρουσιάζει — προβολή μόνο
+                Το ζωντανό μάθημα μεταφέρθηκε προσωρινά στην ομάδα — προβολή μόνο
               </span>
             </div>
           )}
@@ -509,27 +710,16 @@ function LiveRoom() {
           )}
 
           <div className="flex-1 relative overflow-hidden">
-          {isPresentationMode ? (
-            // Student, teacher is presenting: ignore tabs entirely, show
-            // exactly what's being broadcast, read-only.
-            <div className="absolute inset-0">
-              <CanvasStage
-                mapId={studentBoardId}
-                tool={tool}
-                setTool={setTool}
-                isActive
-                onReady={(api) => { saveApiRef.current = api; }}
-                liveSync={session.status === "active"}
-                liveOwner={isLiveOwner}
-                readOnly={isReadOnly}
-              />
-            </div>
-          ) : (
-            // Teacher and students alike: every open tab (main lesson +
-            // any group boards) stays mounted so switching between them is
-            // instant and never loses in-progress edits.
-            tabs.map((tab) => {
+          {tabs.map((tab) => {
               const isActive = tab.id === activeTabId;
+              // The "main" tab shows session.mainBoardId normally, but if
+              // the teacher has "transferred" the live lesson into a
+              // group (see the Μεταφορά button), it mirrors that group's
+              // board instead — for EVERYONE who clicks this tab, not
+              // just whoever's currently looking. Every other tab is
+              // completely unaffected.
+              const mapId = tab.id === "main" ? (session.presentingBoardId || session.mainBoardId) : tab.mapId;
+              const isMirroredMain = tab.id === "main" && !!session.presentingBoardId;
               return (
                 // Keep ALL tabs mounted — visibility:hidden preserves state without display:none unmount
                 <div
@@ -542,30 +732,53 @@ function LiveRoom() {
                   }}
                 >
                   <CanvasStage
-                    mapId={tab.mapId}
+                    mapId={mapId}
                     tool={tool}
                     setTool={setTool}
                     isActive={isActive}
                     onReady={isActive ? (api) => { saveApiRef.current = api; } : undefined}
+                    onSelectionChange={isActive ? setSelectedObjects : undefined}
+                    onSaveStatusChange={
+                      !isTeacher && tab.kind === "collab" && myGroup && tab.mapId === myGroup.boardId
+                        ? (status) => {
+                            if (status === "saved" && user && !contributedGroupsRef.current.has(myGroup.id)) {
+                              contributedGroupsRef.current.add(myGroup.id);
+                              markGroupContribution(sessionId, myGroup.id, user.uid).catch(() => {});
+                            }
+                          }
+                        : undefined
+                    }
                     liveSync={session.status === "active"}
                     liveOwner={
-                      isTeacher
+                      isMirroredMain
+                        ? false // frozen mirror — nobody edits through the main tab while transferred
+                        : isTeacher
                         ? isLiveOwner
                         : tab.kind === "collab" && tab.mapId === myGroup?.boardId
                           ? true // any group member can co-edit with their groupmates
                           : studentHasEditOnMain
                     }
                     readOnly={
-                      isTeacher
+                      isMirroredMain
+                        ? true
+                        : isTeacher
                         ? isReadOnly
                         : session.status === "ended" ||
                           session.status === "paused" ||
+                          session.status === "ending" ||
                           (tab.kind === "collab" && tab.mapId === myGroup?.boardId ? false : !studentHasEditOnMain)
                     }
                   />
                 </div>
               );
-            })
+            })}
+          {!isReadOnly && (
+            <SelectionActionsBar
+              selectedObjects={selectedObjects}
+              onCreateNewProject={handleCreateNewProjectFromSelection}
+              sendTargets={sendTargets}
+              onSendTo={handleSendSelectionTo}
+            />
           )}
           </div>
         </div>
@@ -584,7 +797,7 @@ function LiveRoom() {
               <StudentSessionPanel
                 session={session}
                 currentTabLabel={
-                  isPresentationMode ? "Παρουσίαση" : activeTab?.kind === "collab" ? activeTab.label : "Ζωντανό Μάθημα"
+                  isViewingMirroredMain ? "Ζωντανό Μάθημα (ομάδα)" : activeTab?.kind === "collab" ? activeTab.label : "Ζωντανό Μάθημα"
                 }
               />
               <div className="border-t border-border pt-3 mt-1">
