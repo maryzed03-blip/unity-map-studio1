@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/lib/auth-context";
 import { subscribePresence, type PresenceMap } from "@/lib/presence";
+import { stopBroadcast } from "@/lib/live-broadcast";
 import { Link, useNavigate } from "@tanstack/react-router";
 import {
   type LiveSession,
@@ -23,6 +24,8 @@ import {
   teacherEnterRoom,
   setPresentingBoard,
   endSessionAndSave,
+  pauseSession,
+  notifySessionPaused,
   sendDesignToUser,
   subscribeReceivedDesigns,
   markDesignSaved,
@@ -70,6 +73,7 @@ import {
   GraduationCap,
   Shuffle,
   LogOut,
+  PauseCircle,
   UserPlus,
   Save,
   MoreHorizontal,
@@ -438,20 +442,6 @@ export function GroupRoomsPanel({
                     {isTeacher && (
                       <Button
                         size="sm"
-                        variant={session.presentingBoardId === group.boardId ? "default" : "ghost"}
-                        className="h-5 w-5 p-0"
-                        title="Παρουσίαση σε όλη την τάξη"
-                        onClick={() => {
-                          const stopping = session.presentingBoardId === group.boardId;
-                          setPresentingBoard(session.id, stopping ? null : group.boardId).catch(() => {});
-                        }}
-                      >
-                        <MonitorPlay className="h-3 w-3" />
-                      </Button>
-                    )}
-                    {isTeacher && (
-                      <Button
-                        size="sm"
                         variant="ghost"
                         className="h-5 w-5 p-0 text-destructive"
                         onClick={() => handleDelete(group)}
@@ -538,6 +528,8 @@ export function TeacherSessionPanel({
   const presence = usePresence();
   const [busy, setBusy] = useState(false);
   const [endingSession, setEndingSession] = useState(false);
+  const [pausing, setPausing] = useState(false);
+  const [endChoiceOpen, setEndChoiceOpen] = useState(false);
 
   if (!user || user.uid !== session.teacherId) return null;
 
@@ -568,19 +560,35 @@ export function TeacherSessionPanel({
     toast.success("Όλοι επέστρεψαν στο Ζωντανό Μάθημα");
   };
 
+  const handlePause = async () => {
+    setPausing(true);
+    try {
+      await pauseSession(session.id);
+      stopBroadcast();
+      await notifySessionPaused(session, session.teacherName).catch(() => {});
+      toast.success("Το μάθημα μπήκε σε παύση — μπορείτε να συνεχίσετε αργότερα από το ίδιο κουμπί.");
+      setEndChoiceOpen(false);
+    } catch {
+      toast.error("Αποτυχία παύσης");
+    } finally {
+      setPausing(false);
+    }
+  };
+
   const handleEndSession = async () => {
-    if (!confirm("Να λήξει το Ζωντανό Μάθημα;")) return;
     setEndingSession(true);
     try {
-      const { saved, failed } = await endSessionAndSave(session.id, user.uid);
-      if (failed.length > 0) {
-        toast.error(`Αποτυχία αποθήκευσης ${failed.length} σχεδίων. Το μάθημα ΔΕΝ έκλεισε.`, {
-          description: failed.join(", "),
+      const { ended, distributed, failed } = await endSessionAndSave(session.id, user.uid, profile?.displayName ?? "Καθηγητής");
+      if (!ended) {
+        toast.error(`Αποτυχία αποθήκευσης για ${failed.length} μαθητή/ές. Το μάθημα ΔΕΝ έκλεισε — πατήστε ξανά "Οριστική Λήξη" για επανάληψη.`, {
+          description: failed.map((f) => `${f.groupName} → ${f.studentName}`).join(", "),
           duration: 10000,
         });
         return;
       }
-      toast.success(`Το μάθημα έληξε. ${saved} σχέδια αποθηκεύτηκαν.`);
+      toast.success(distributed > 0 ? `Το μάθημα έληξε οριστικά. ${distributed} σχέδια μοιράστηκαν στους μαθητές.` : "Το μάθημα έληξε οριστικά.");
+      stopBroadcast();
+      setEndChoiceOpen(false);
     } catch (e) {
       toast.error("Αποτυχία αποθήκευσης. Το μάθημα ΔΕΝ έκλεισε.");
     } finally {
@@ -604,12 +612,12 @@ export function TeacherSessionPanel({
         <span className="text-sm font-semibold">Πάνελ Καθηγητή</span>
         {session.presentingBoardId && (
           <>
-            <Badge variant="default" className="text-[10px] h-4 px-1 ml-auto animate-pulse">ΠΑΡΟΥΣΙΑΣΗ</Badge>
+            <Badge variant="default" className="text-[10px] h-4 px-1 ml-auto animate-pulse">ΜΕΤΑΦΟΡΑ</Badge>
             <Button
               size="sm"
               variant="ghost"
               className="h-5 px-1.5 text-[10px] text-destructive"
-              title="Διακοπή παρουσίασης — σταματά ό,τι βλέπουν όλοι οι μαθητές να επιβάλλεται"
+              title="Επιστροφή στο ζωντανό μάθημα — έκτακτο κουμπί, δουλεύει ακόμα κι αν η ομάδα διαγράφηκε"
               onClick={() => setPresentingBoard(session.id, null).catch(() => {})}
             >
               Διακοπή
@@ -691,10 +699,31 @@ export function TeacherSessionPanel({
 
       {/* End session */}
       {session.status === "active" && (
-        <Button variant="destructive" className="w-full gap-2" onClick={handleEndSession} disabled={endingSession}>
-          {endingSession ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogOut className="h-4 w-4" />}
-          {endingSession ? "Αποθήκευση και Λήξη…" : "Λήξη Ζωντανού Μαθήματος"}
-        </Button>
+        <Dialog open={endChoiceOpen} onOpenChange={setEndChoiceOpen}>
+          <Button variant="destructive" className="w-full gap-2" onClick={() => setEndChoiceOpen(true)}>
+            <LogOut className="h-4 w-4" />
+            Λήξη Ζωντανού Μαθήματος
+          </Button>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Τι θέλετε να κάνετε;</DialogTitle>
+              <DialogDescription>
+                Μπορείτε να βάλετε το μάθημα σε παύση (θα το ξαναβρείτε ακριβώς όπως το αφήσατε, ίδιες ομάδες, ίδιος πίνακας),
+                ή να το λήξετε οριστικά (αποθηκεύονται όλα τα σχέδια και το μάθημα κλείνει για πάντα).
+              </DialogDescription>
+            </DialogHeader>
+            <div className="flex flex-col gap-2 pt-2">
+              <Button variant="outline" className="w-full gap-2 justify-start" onClick={handlePause} disabled={pausing || endingSession}>
+                {pausing ? <Loader2 className="h-4 w-4 animate-spin" /> : <PauseCircle className="h-4 w-4" />}
+                {pausing ? "Παύση…" : "Παύση Μαθήματος"}
+              </Button>
+              <Button variant="destructive" className="w-full gap-2 justify-start" onClick={handleEndSession} disabled={pausing || endingSession}>
+                {endingSession ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogOut className="h-4 w-4" />}
+                {endingSession ? "Αποθήκευση και Λήξη…" : "Οριστική Λήξη"}
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
       )}
     </>
   );
@@ -765,11 +794,11 @@ export function StudentSessionPanel({
         )}
       </Card>
 
-      {/* Presentation notification */}
+      {/* Live-lesson-transferred notification */}
       {isBeingPresented && (
         <div className="flex items-center gap-2 rounded-lg bg-primary/10 border border-primary/20 px-3 py-2">
           <MonitorPlay className="h-4 w-4 text-primary shrink-0" />
-          <span className="text-xs text-primary font-medium">Ο καθηγητής παρουσιάζει</span>
+          <span className="text-xs text-primary font-medium">Το ζωντανό μάθημα μεταφέρθηκε σε ομάδα</span>
         </div>
       )}
 
