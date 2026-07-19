@@ -31,7 +31,8 @@ import { mapStore } from "@/lib/canvas/storage";
 import { AIPanel } from "@/components/ai/AIPanel";
 import type { CanvasObject } from "@/lib/canvas/types";
 import { subscribeActiveSession, subscribeGroupRooms, type LiveSession, type GroupRoom } from "@/lib/live-sessions";
-import { getProject, createProjectFromObjects, subscribeCollabParticipants, type Project } from "@/lib/projects";
+import { getProject, createProjectFromObjects, subscribeCollabParticipants, finalizeCollabProjectIfEmpty, type Project } from "@/lib/projects";
+import { subscribePresence, setCurrentCollabProject, type PresenceMap } from "@/lib/presence";
 import { insertObjectsIntoBoard } from "@/lib/canvas/insert-into-board";
 import { SelectionActionsBar, type SendTarget } from "@/components/canvas/SelectionActionsBar";
 
@@ -151,6 +152,34 @@ function Editor() {
   // read-only. Any other project (personal/etc): always editable, same as
   // before this feature existed.
   const readOnly = project?.projectType === "collaborative" && !isCollabParticipant;
+
+  // Mark myself as "currently here" in real-time presence while I'm a
+  // participant on this collaborative project's page, and clear it (then
+  // check if I was the last one) the moment I leave — covers normal
+  // navigation-away/tab-close-with-cleanup. An abrupt crash/kill relies
+  // on RTDB's onDisconnect to clear presence server-side; the actual
+  // finalize call in that edge case only fires the next time someone
+  // else's client happens to check (accepted trade-off, not a security
+  // or data-loss issue — the collaboration just stays "live" a bit
+  // longer than strictly necessary).
+  useEffect(() => {
+    if (!isCollabParticipant) return;
+    setCurrentCollabProject(projectId);
+    return () => {
+      setCurrentCollabProject(null);
+      // Give the presence write above a moment to land before checking
+      // who else is still here.
+      setTimeout(() => {
+        const unsub = subscribePresence((map: PresenceMap) => {
+          unsub();
+          const stillHere = Object.values(map).some(
+            (p) => p.state === "online" && p.currentCollabProjectId === projectId,
+          );
+          if (!stillHere) finalizeCollabProjectIfEmpty(projectId).catch(() => {});
+        });
+      }, 300);
+    };
+  }, [isCollabParticipant, projectId]);
 
   // ── Selection actions bar (send to live lesson / new project) ──────
   const [selectedObjects, setSelectedObjects] = useState<CanvasObject[]>([]);
