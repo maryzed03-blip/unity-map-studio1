@@ -8,6 +8,7 @@ import {
   resumeSession,
   notifySessionPaused,
   endSessionAndSave,
+  setPresentingBoard,
   recordGroupJoin,
   recordGroupLeave,
   markGroupContribution,
@@ -375,9 +376,6 @@ function LiveRoom() {
 
   const activeTab = tabs.find((t) => t.id === activeTabId);
 
-  // Presentation mode: students see the presented board read-only
-  const isPresentationMode = !isTeacher && !!session.presentingBoardId;
-
   // Students are read-only on the main live board UNLESS teacher granted edit permission
   const studentHasEditOnMain = !isTeacher && (session.editPermissions ?? []).includes(user?.uid ?? "");
 
@@ -388,12 +386,13 @@ function LiveRoom() {
   // click between them like the teacher does.
   const myGroup = !isTeacher ? groups.find((g) => g.participantIds.includes(user?.uid ?? "")) : undefined;
 
-  const studentOnGroupTab = !isPresentationMode && activeTab?.kind === "collab";
+  const studentOnGroupTab = activeTab?.kind === "collab";
   const studentIsShowingOwnGroup = studentOnGroupTab;
-  const studentIsShowingMain = !isPresentationMode && !studentOnGroupTab;
-  // Presentation mode always overrides whatever tab a student has open —
-  // it's a broadcast from the teacher, not a personal navigation choice.
-  const studentBoardId = session.presentingBoardId || activeTab?.mapId || session.mainBoardId;
+  const studentIsShowingMain = !studentOnGroupTab;
+  // True while THIS student is looking at the "main" tab and the teacher
+  // has transferred the live lesson into a group — the board they're
+  // seeing is that group's, mirrored read-only.
+  const isViewingMirroredMain = activeTab?.id === "main" && !!session.presentingBoardId;
 
   // For the TEACHER, tabs still apply (main + any group boards they've
   // opened to check in on). "collab" tabs are teacher-only navigation now.
@@ -402,8 +401,8 @@ function LiveRoom() {
     : undefined;
 
   const isLiveOwner = isTeacher
-    ? true
-    : isPresentationMode
+    ? !isViewingMirroredMain // even the teacher can't edit the frozen mirror
+    : isViewingMirroredMain
       ? false
       : studentIsShowingOwnGroup
         ? true // any group member can co-edit with their groupmates
@@ -413,6 +412,7 @@ function LiveRoom() {
     session.status === "ended" ||
     session.status === "paused" ||
     session.status === "ending" ||
+    isViewingMirroredMain ||
     (!isTeacher && !isLiveOwner);
 
   // ── Selection actions bar (send to another board / new project) ────
@@ -567,9 +567,35 @@ function LiveRoom() {
               Αποθήκευση
             </Button>
           )}
-          {session.presentingBoardId && !isTeacher && (
+          {isTeacher && activeTab?.kind === "collab" && (
+            session.presentingBoardId === activeTab.mapId ? (
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5 h-7 text-xs"
+                onClick={() => setPresentingBoard(session.id, null).catch(() => {})}
+              >
+                <MonitorPlay className="h-3.5 w-3.5" />
+                Επιστροφή στο ζωντανό μάθημα
+              </Button>
+            ) : (
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5 h-7 text-xs"
+                disabled={!!session.presentingBoardId}
+                title={session.presentingBoardId ? "Το μάθημα είναι ήδη μεταφερμένο σε άλλη ομάδα" : undefined}
+                onClick={() => activeTab && setPresentingBoard(session.id, activeTab.mapId).catch(() => {})}
+              >
+                <MonitorPlay className="h-3.5 w-3.5" />
+                Μεταφορά ζωντανού μαθήματος εδώ
+              </Button>
+            )
+          )}
+          {session.presentingBoardId && (
             <span className="flex items-center gap-1.5 text-xs font-bold text-primary border border-primary/30 rounded px-2 py-0.5">
-              <MonitorPlay className="h-3.5 w-3.5" /> Παρουσίαση
+              <MonitorPlay className="h-3.5 w-3.5" />
+              Μεταφέρθηκε στην ομάδα «{groups.find((g) => g.boardId === session.presentingBoardId)?.name ?? "…"}»
             </span>
           )}
           <span className="hidden sm:flex items-center gap-1.5 text-xs font-bold tracking-widest uppercase text-[color:var(--success)] border border-[color:var(--success)] rounded px-2 py-0.5">
@@ -650,11 +676,11 @@ function LiveRoom() {
         {/* Canvas */}
         <div className="flex-1 relative overflow-hidden flex flex-col" style={{ minWidth: 0 }}>
           {/* Student banners — exactly one of these three applies at a time */}
-          {!isTeacher && session.status === "active" && isPresentationMode && (
+          {session.status === "active" && isViewingMirroredMain && (
             <div className="shrink-0 border-b border-border bg-primary/10 px-4 py-1.5 flex items-center gap-2">
               <MonitorPlay className="h-3.5 w-3.5 text-primary shrink-0" />
               <span className="text-xs text-primary font-medium">
-                Ο καθηγητής παρουσιάζει — προβολή μόνο
+                Το ζωντανό μάθημα μεταφέρθηκε προσωρινά στην ομάδα — προβολή μόνο
               </span>
             </div>
           )}
@@ -684,27 +710,16 @@ function LiveRoom() {
           )}
 
           <div className="flex-1 relative overflow-hidden">
-          {isPresentationMode ? (
-            // Student, teacher is presenting: ignore tabs entirely, show
-            // exactly what's being broadcast, read-only.
-            <div className="absolute inset-0">
-              <CanvasStage
-                mapId={studentBoardId}
-                tool={tool}
-                setTool={setTool}
-                isActive
-                onReady={(api) => { saveApiRef.current = api; }}
-                liveSync={session.status === "active"}
-                liveOwner={isLiveOwner}
-                readOnly={isReadOnly}
-              />
-            </div>
-          ) : (
-            // Teacher and students alike: every open tab (main lesson +
-            // any group boards) stays mounted so switching between them is
-            // instant and never loses in-progress edits.
-            tabs.map((tab) => {
+          {tabs.map((tab) => {
               const isActive = tab.id === activeTabId;
+              // The "main" tab shows session.mainBoardId normally, but if
+              // the teacher has "transferred" the live lesson into a
+              // group (see the Μεταφορά button), it mirrors that group's
+              // board instead — for EVERYONE who clicks this tab, not
+              // just whoever's currently looking. Every other tab is
+              // completely unaffected.
+              const mapId = tab.id === "main" ? (session.presentingBoardId || session.mainBoardId) : tab.mapId;
+              const isMirroredMain = tab.id === "main" && !!session.presentingBoardId;
               return (
                 // Keep ALL tabs mounted — visibility:hidden preserves state without display:none unmount
                 <div
@@ -717,7 +732,7 @@ function LiveRoom() {
                   }}
                 >
                   <CanvasStage
-                    mapId={tab.mapId}
+                    mapId={mapId}
                     tool={tool}
                     setTool={setTool}
                     isActive={isActive}
@@ -735,14 +750,18 @@ function LiveRoom() {
                     }
                     liveSync={session.status === "active"}
                     liveOwner={
-                      isTeacher
+                      isMirroredMain
+                        ? false // frozen mirror — nobody edits through the main tab while transferred
+                        : isTeacher
                         ? isLiveOwner
                         : tab.kind === "collab" && tab.mapId === myGroup?.boardId
                           ? true // any group member can co-edit with their groupmates
                           : studentHasEditOnMain
                     }
                     readOnly={
-                      isTeacher
+                      isMirroredMain
+                        ? true
+                        : isTeacher
                         ? isReadOnly
                         : session.status === "ended" ||
                           session.status === "paused" ||
@@ -752,9 +771,8 @@ function LiveRoom() {
                   />
                 </div>
               );
-            })
-          )}
-          {!isReadOnly && !isPresentationMode && (
+            })}
+          {!isReadOnly && (
             <SelectionActionsBar
               selectedObjects={selectedObjects}
               onCreateNewProject={handleCreateNewProjectFromSelection}
@@ -779,7 +797,7 @@ function LiveRoom() {
               <StudentSessionPanel
                 session={session}
                 currentTabLabel={
-                  isPresentationMode ? "Παρουσίαση" : activeTab?.kind === "collab" ? activeTab.label : "Ζωντανό Μάθημα"
+                  isViewingMirroredMain ? "Ζωντανό Μάθημα (ομάδα)" : activeTab?.kind === "collab" ? activeTab.label : "Ζωντανό Μάθημα"
                 }
               />
               <div className="border-t border-border pt-3 mt-1">

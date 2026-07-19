@@ -442,20 +442,6 @@ export function GroupRoomsPanel({
                     {isTeacher && (
                       <Button
                         size="sm"
-                        variant={session.presentingBoardId === group.boardId ? "default" : "ghost"}
-                        className="h-5 w-5 p-0"
-                        title="Παρουσίαση σε όλη την τάξη"
-                        onClick={() => {
-                          const stopping = session.presentingBoardId === group.boardId;
-                          setPresentingBoard(session.id, stopping ? null : group.boardId).catch(() => {});
-                        }}
-                      >
-                        <MonitorPlay className="h-3 w-3" />
-                      </Button>
-                    )}
-                    {isTeacher && (
-                      <Button
-                        size="sm"
                         variant="ghost"
                         className="h-5 w-5 p-0 text-destructive"
                         onClick={() => handleDelete(group)}
@@ -626,12 +612,12 @@ export function TeacherSessionPanel({
         <span className="text-sm font-semibold">Πάνελ Καθηγητή</span>
         {session.presentingBoardId && (
           <>
-            <Badge variant="default" className="text-[10px] h-4 px-1 ml-auto animate-pulse">ΠΑΡΟΥΣΙΑΣΗ</Badge>
+            <Badge variant="default" className="text-[10px] h-4 px-1 ml-auto animate-pulse">ΜΕΤΑΦΟΡΑ</Badge>
             <Button
               size="sm"
               variant="ghost"
               className="h-5 px-1.5 text-[10px] text-destructive"
-              title="Διακοπή παρουσίασης — σταματά ό,τι βλέπουν όλοι οι μαθητές να επιβάλλεται"
+              title="Επιστροφή στο ζωντανό μάθημα — έκτακτο κουμπί, δουλεύει ακόμα κι αν η ομάδα διαγράφηκε"
               onClick={() => setPresentingBoard(session.id, null).catch(() => {})}
             >
               Διακοπή
@@ -808,11 +794,11 @@ export function StudentSessionPanel({
         )}
       </Card>
 
-      {/* Presentation notification */}
+      {/* Live-lesson-transferred notification */}
       {isBeingPresented && (
         <div className="flex items-center gap-2 rounded-lg bg-primary/10 border border-primary/20 px-3 py-2">
           <MonitorPlay className="h-4 w-4 text-primary shrink-0" />
-          <span className="text-xs text-primary font-medium">Ο καθηγητής παρουσιάζει</span>
+          <span className="text-xs text-primary font-medium">Το ζωντανό μάθημα μεταφέρθηκε σε ομάδα</span>
         </div>
       )}
 
