@@ -2,6 +2,7 @@ import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { useAuth } from "@/lib/auth-context";
 import { useEffect } from "react";
 import { InvitationListener } from "@/components/live/InvitationListener";
+import { LiveBroadcastListener } from "@/components/live/LiveBroadcastListener";
 import { QuotaWarningSurface } from "@/components/QuotaWarningSurface";
 import { Button } from "@/components/ui/button";
 import {
@@ -262,6 +263,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         <div className="flex-1 min-h-0">{children}</div>
       </main>
       <InvitationListener />
+      <LiveBroadcastListener />
       <QuotaWarningSurface />
     </div>
   );
