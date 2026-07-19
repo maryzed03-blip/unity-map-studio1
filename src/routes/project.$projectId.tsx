@@ -2,7 +2,6 @@ import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAuth } from "@/lib/auth-context";
 import { ClientOnly } from "@/lib/client-only";
-import { getProject, createProjectFromObjects, type Project } from "@/lib/projects";
 import { Button } from "@/components/ui/button";
 import {
   ArrowLeft,
@@ -31,7 +30,8 @@ import { exportPNG, exportSVG, exportJSON } from "@/lib/canvas/export";
 import { mapStore } from "@/lib/canvas/storage";
 import { AIPanel } from "@/components/ai/AIPanel";
 import type { CanvasObject } from "@/lib/canvas/types";
-import { subscribeProjectSession, subscribeActiveSession, subscribeGroupRooms, type LiveSession, type GroupRoom } from "@/lib/live-sessions";
+import { subscribeActiveSession, subscribeGroupRooms, type LiveSession, type GroupRoom } from "@/lib/live-sessions";
+import { getProject, createProjectFromObjects, subscribeCollabParticipants, type Project } from "@/lib/projects";
 import { insertObjectsIntoBoard } from "@/lib/canvas/insert-into-board";
 import { SelectionActionsBar, type SendTarget } from "@/components/canvas/SelectionActionsBar";
 
@@ -75,7 +75,6 @@ function Editor() {
     appendObjects: (o: CanvasObject[]) => void;
   } | null>(null);
   const [manualSaving, setManualSaving] = useState(false);
-  const [shareSession, setShareSession] = useState<LiveSession | null>(null);
 
   // Tabs — main tab is always this project
   const [tabs, setTabs] = useState<CanvasTab[]>([
@@ -112,10 +111,16 @@ function Editor() {
   const activeTab = tabs.find((t) => t.id === activeTabId);
   const activeMapId = activeTab?.mapId ?? projectId;
 
-  // Subscribe to active share session for this project
+  // Real-time list of who can co-edit this project — only meaningful for
+  // projectType "collaborative" (see startCollabProject/joinCollabProject
+  // in projects.ts). Deliberately independent of liveSessions entirely:
+  // no "one active session" restriction, any number of different people
+  // can each be running their own simultaneous collaboration.
+  const [collabParticipantIds, setCollabParticipantIds] = useState<string[]>([]);
   useEffect(() => {
-    return subscribeProjectSession(projectId, setShareSession);
-  }, [projectId]);
+    if (project?.projectType !== "collaborative") { setCollabParticipantIds([]); return; }
+    return subscribeCollabParticipants(projectId, setCollabParticipantIds);
+  }, [projectId, project?.projectType]);
 
   // Is this board one of the public Χώρος Εργασίας boards? Checked directly
   // against the live workspaceRooms collection (boardId), NOT a flag stored
@@ -139,12 +144,13 @@ function Editor() {
     };
   }, [projectId]);
 
-  // readOnly = sharing active AND current user is not owner AND not in editPermissions
   const { user } = useAuth();
-  const readOnly =
-    !!shareSession &&
-    shareSession.teacherId !== user?.uid &&
-    !(shareSession.editPermissions ?? []).includes(user?.uid ?? "");
+  const isCollabParticipant = project?.projectType === "collaborative" && collabParticipantIds.includes(user?.uid ?? "");
+  // A collaborative project: anyone in the participant list can co-edit,
+  // like a group — everyone else (an invite hasn't been accepted yet) is
+  // read-only. Any other project (personal/etc): always editable, same as
+  // before this feature existed.
+  const readOnly = project?.projectType === "collaborative" && !isCollabParticipant;
 
   // ── Selection actions bar (send to live lesson / new project) ──────
   const [selectedObjects, setSelectedObjects] = useState<CanvasObject[]>([]);
@@ -380,9 +386,7 @@ function Editor() {
         <div className="flex-1 relative min-w-0 overflow-hidden">
           {tabs.map((tab) => {
             const isActive = tab.id === activeTabId;
-            const mapIdForTab = tab.id === "main"
-              ? (readOnly ? shareSession?.mainBoardId ?? projectId : projectId)
-              : tab.mapId;
+            const mapIdForTab = tab.id === "main" ? projectId : tab.mapId;
             return (
               // Keep ALL tabs mounted — use pointer-events + visibility to hide.
               // display:none causes unmount which loses canvas state.
@@ -404,8 +408,8 @@ function Editor() {
                   onSaveStatusChange={tab.id === "main" ? setSaveState : undefined}
                   onReady={tab.id === "main" ? (api) => { saveApiRef.current = api; } : undefined}
                   onSelectionChange={tab.id === "main" ? handleSelectionChange : undefined}
-                  liveSync={tab.id === "main" ? (!!shareSession || isWorkspaceRoomBoard) : false}
-                  liveOwner={tab.id === "main" ? (!!shareSession || isWorkspaceRoomBoard) : false}
+                  liveSync={tab.id === "main" ? (isCollabParticipant || isWorkspaceRoomBoard) : false}
+                  liveOwner={tab.id === "main" ? (isCollabParticipant || isWorkspaceRoomBoard) : false}
                   readOnly={tab.id === "main" ? readOnly : false}
                 />
               </div>
