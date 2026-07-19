@@ -98,6 +98,52 @@ export async function createProject(
   return ref.id;
 }
 
+/** Creates a new personal project pre-populated with the given objects
+ *  (fresh ids, re-centered near the origin so it looks tidy when opened)
+ *  instead of starting blank. Used by "Δημιουργία νέου σχεδίου" on a
+ *  canvas selection — see insert-into-board.ts for the id-regeneration
+ *  helper this reuses. */
+export async function createProjectFromObjects(
+  ownerId: string,
+  title: string,
+  objects: import("./canvas/types").CanvasObject[],
+  workspaceType: WorkspaceType = "free-drawing",
+): Promise<string> {
+  const { regenerateAndOffsetObjects } = await import("./canvas/insert-into-board");
+  const PADDING = 40;
+  const left = objects.length > 0 ? Math.min(...objects.map((o) => o.x)) : 0;
+  const top = objects.length > 0 ? Math.min(...objects.map((o) => o.y)) : 0;
+  const placed = regenerateAndOffsetObjects(objects, PADDING - left, PADDING - top);
+
+  const ref = await cAddDoc(collection(db(), "projects"), {
+    ownerId,
+    title,
+    status: "draft",
+    projectType: "personal" as ProjectType,
+    mode: "solo" as ProjectMode,
+    workspaceType,
+    sourceMapId: null,
+    liveSessionId: null,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+  await cSetDoc(doc(db(), "projects", ref.id, "snapshots", "current"), {
+    payload: { objects: placed, viewport: { x: 0, y: 0, zoom: 1 }, settings: {} },
+    schemaVersion: 1,
+    version: 1,
+    isCurrent: true,
+    savedBy: ownerId,
+    saveType: "auto",
+    savedAt: serverTimestamp(),
+  });
+  await cSetDoc(doc(db(), "projects", ref.id, "members", ownerId), {
+    role: "owner",
+    invitedAt: serverTimestamp(),
+    acceptedAt: serverTimestamp(),
+  });
+  return ref.id;
+}
+
 export function subscribeMyProjects(
   ownerId: string,
   cb: (projects: Project[]) => void,
