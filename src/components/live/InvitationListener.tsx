@@ -50,6 +50,7 @@ export function InvitationListener() {
         const lessonTitle = (inv as { title?: string }).title ?? inv.fromUserName;
         const isLessonStart = type === "lesson_start";
         const isLessonPaused = type === "lesson_paused";
+        const isCollabProject = type === "collab_project";
 
         // Always delete from Firestore so it stops appearing in queries
         deleteInvitation(inv.id).catch(() => {});
@@ -73,6 +74,26 @@ export function InvitationListener() {
                   navigate({ to: "/lobby" });
                 }
               },
+            },
+          });
+          continue;
+        }
+
+        if (isCollabProject) {
+          toast(`Πρόσκληση για συνεργασία: "${lessonTitle}"`, {
+            duration: 60_000,
+            action: {
+              label: "Αποδοχή",
+              onClick: async () => {
+                try {
+                  const pid = await respondToInvitation(inv.id, true, user.uid);
+                  if (pid) navigate({ to: "/project/$projectId", params: { projectId: pid } });
+                } catch { toast.error("Αποτυχία αποδοχής"); }
+              },
+            },
+            cancel: {
+              label: "Άρνηση",
+              onClick: () => respondToInvitation(inv.id, false, user.uid).catch(() => {}),
             },
           });
           continue;
