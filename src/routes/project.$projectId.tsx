@@ -2,7 +2,7 @@ import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { useAuth } from "@/lib/auth-context";
 import { ClientOnly } from "@/lib/client-only";
-import { getProject, type Project } from "@/lib/projects";
+import { getProject, createProjectFromObjects, type Project } from "@/lib/projects";
 import { Button } from "@/components/ui/button";
 import {
   ArrowLeft,
@@ -31,8 +31,9 @@ import { exportPNG, exportSVG, exportJSON } from "@/lib/canvas/export";
 import { mapStore } from "@/lib/canvas/storage";
 import { AIPanel } from "@/components/ai/AIPanel";
 import type { CanvasObject } from "@/lib/canvas/types";
-import { SharePanel } from "@/components/live/SharePanel";
-import { subscribeProjectSession, type LiveSession } from "@/lib/live-sessions";
+import { subscribeProjectSession, subscribeActiveSession, subscribeGroupRooms, type LiveSession, type GroupRoom } from "@/lib/live-sessions";
+import { insertObjectsIntoBoard } from "@/lib/canvas/insert-into-board";
+import { SelectionActionsBar, type SendTarget } from "@/components/canvas/SelectionActionsBar";
 
 export const Route = createFileRoute("/project/$projectId")({
   head: () => ({ meta: [{ title: "Editor — Unity Map Studio" }] }),
@@ -145,6 +146,36 @@ function Editor() {
     shareSession.teacherId !== user?.uid &&
     !(shareSession.editPermissions ?? []).includes(user?.uid ?? "");
 
+  // ── Selection actions bar (send to live lesson / new project) ──────
+  const [selectedObjects, setSelectedObjects] = useState<CanvasObject[]>([]);
+  const [activeLiveSession, setActiveLiveSession] = useState<LiveSession | null | undefined>(undefined);
+  useEffect(() => subscribeActiveSession(setActiveLiveSession), []);
+  const isActiveSessionTeacher = !!user && !!activeLiveSession && activeLiveSession.teacherId === user.uid;
+  const [liveGroups, setLiveGroups] = useState<GroupRoom[]>([]);
+  useEffect(() => {
+    if (!activeLiveSession || !isActiveSessionTeacher) { setLiveGroups([]); return; }
+    return subscribeGroupRooms(activeLiveSession.id, setLiveGroups);
+  }, [activeLiveSession, isActiveSessionTeacher]);
+
+  const sendTargets: SendTarget[] = activeLiveSession
+    ? [
+        { id: "main", mapId: activeLiveSession.mainBoardId, label: `📚 ${activeLiveSession.title} (κεντρικός πίνακας)` },
+        ...(isActiveSessionTeacher
+          ? liveGroups.map((g) => ({ id: g.id, mapId: g.boardId, label: `👥 ${g.name}` }))
+          : []),
+      ]
+    : [];
+
+  const handleCreateNewProject = async (objects: CanvasObject[]) => {
+    if (!user) return;
+    const newId = await createProjectFromObjects(user.uid, `${project?.title ?? "Σχέδιο"} (επιλογή)`, objects, project?.workspaceType ?? "free-drawing");
+    window.open(`/project/${newId}`, "_blank");
+  };
+
+  const handleSendTo = async (target: SendTarget, objects: CanvasObject[]) => {
+    await insertObjectsIntoBoard(target.mapId, objects);
+  };
+
   useEffect(() => {
     (async () => {
       try {
@@ -233,12 +264,6 @@ function Editor() {
               onInsert={(objs) => saveApiRef.current?.appendObjects(objs)}
             />
           )}
-          <SharePanel
-            projectId={projectId}
-            projectTitle={project.title}
-            workspaceType={project.workspaceType ?? "free-drawing"}
-            onRequestSave={() => saveApiRef.current?.save() ?? Promise.resolve()}
-          />
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" size="sm" className="gap-1.5">
@@ -370,6 +395,7 @@ function Editor() {
                   isActive={isActive}
                   onSaveStatusChange={tab.id === "main" ? setSaveState : undefined}
                   onReady={tab.id === "main" ? (api) => { saveApiRef.current = api; } : undefined}
+                  onSelectionChange={tab.id === "main" ? setSelectedObjects : undefined}
                   liveSync={tab.id === "main" ? (!!shareSession || isWorkspaceRoomBoard) : false}
                   liveOwner={tab.id === "main" ? (!!shareSession || isWorkspaceRoomBoard) : false}
                   readOnly={tab.id === "main" ? readOnly : false}
@@ -377,6 +403,14 @@ function Editor() {
               </div>
             );
           })}
+          {!readOnly && (
+            <SelectionActionsBar
+              selectedObjects={selectedObjects}
+              onCreateNewProject={handleCreateNewProject}
+              sendTargets={sendTargets}
+              onSendTo={handleSendTo}
+            />
+          )}
           {readOnly && (
             <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 pointer-events-none">
               <span className="flex items-center gap-1.5 rounded-full bg-amber-100 text-amber-800 border border-amber-300 px-3 py-1 text-xs font-semibold">
