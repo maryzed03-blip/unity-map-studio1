@@ -54,6 +54,11 @@ interface Props {
   readOnly?: boolean;
   /** When false, debounced save and live sync poll are suppressed (background tab). */
   isActive?: boolean;
+  /** Fires whenever the current selection changes, with the actual selected
+   *  objects (not just ids) — lets the parent page show a floating action
+   *  bar ("send to live lesson" / "new project from selection") without
+   *  CanvasStage needing to know anything about those destinations. */
+  onSelectionChange?: (objects: CanvasObject[]) => void;
 }
 
 const newId = () => Math.random().toString(36).slice(2, 10);
@@ -504,6 +509,7 @@ export function CanvasStage({
   liveOwner = false,
   readOnly = false,
   isActive = true,
+  onSelectionChange,
 }: Props) {
   const [state, setState] = useState<CanvasState>(() => emptyCanvasState());
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -511,6 +517,11 @@ export function CanvasStage({
   const [editingId, setEditingId] = useState<string | null>(null);
   // Shape hovered with select tool — shows magnet hints
   const [hoverShapeId, setHoverShapeId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!onSelectionChange) return;
+    const selectedSet = new Set(selectedIds);
+    onSelectionChange(state.objects.filter((o) => selectedSet.has(o.id)));
+  }, [selectedIds, state.objects, onSelectionChange]);
   useEffect(() => {
     // Exit edit mode if the editing object is no longer the (only) selection.
     if (editingId && (selectedIds.length !== 1 || selectedIds[0] !== editingId)) {
@@ -596,8 +607,16 @@ export function CanvasStage({
     onSaveStatusChange?.("dirty");
     const t = setTimeout(async () => {
       onSaveStatusChange?.("saving");
-      await mapStore.save(mapId, state, { inline: liveSync });
-      onSaveStatusChange?.("saved");
+      try {
+        await mapStore.save(mapId, state, { inline: liveSync });
+        onSaveStatusChange?.("saved");
+      } catch (e) {
+        console.warn("Canvas autosave failed", e);
+        // No dedicated "error" state on this simpler 3-value type — fall
+        // back to "dirty" so the UI keeps showing unsaved rather than
+        // falsely claiming "saved".
+        onSaveStatusChange?.("dirty");
+      }
     }, 2000);
     return () => clearTimeout(t);
   }, [state, hydrated, mapId, onSaveStatusChange, liveSync, liveOwner, isActive]);
@@ -689,9 +708,14 @@ export function CanvasStage({
     onReady({
       save: async () => {
         onSaveStatusChange?.("saving");
-        await mapStore.save(mapId, stateRef.current, { inline: liveSync });
-        lastHashRef.current = hashCanvasState(stateRef.current);
-        onSaveStatusChange?.("saved");
+        try {
+          await mapStore.save(mapId, stateRef.current, { inline: liveSync });
+          lastHashRef.current = hashCanvasState(stateRef.current);
+          onSaveStatusChange?.("saved");
+        } catch (e) {
+          onSaveStatusChange?.("dirty");
+          throw e; // let the caller (manual Save button) show its own error toast
+        }
       },
       appendObjects: (objs: CanvasObject[]) => {
         if (!objs.length) return;
