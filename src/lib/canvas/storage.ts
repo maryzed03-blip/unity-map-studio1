@@ -129,10 +129,18 @@ export class FirestoreMapStore implements MapStore {
       // would bail out before ever touching Firestore whenever the
       // external API call failed).
       try {
+        // Firestore's setDoc() throws on ANY undefined field value,
+        // anywhere in the object graph — one shape with an optional prop
+        // left as `undefined` (instead of omitted or null) is enough to
+        // make every single save silently fail from then on, which looks
+        // exactly like "live sync stopped working". JSON round-tripping
+        // is the simplest reliable way to strip undefined at every depth
+        // (JSON.stringify omits undefined-valued keys entirely).
+        const sanitized = JSON.parse(JSON.stringify(state)) as CanvasState;
         await cSetDoc(
           this.snapRef(mapId),
           {
-            payload: state,
+            payload: sanitized,
             // Clear any stale external-payload pointer so load() doesn't
             // prefer an old external copy over this fresher inline one.
             payloadRef: null,
