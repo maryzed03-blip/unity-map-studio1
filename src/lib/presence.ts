@@ -20,6 +20,12 @@ export interface PresenceEntry {
   role: UserProfile["role"];
   lastSeen: number;
   currentSessionId?: string | null;
+  /** Which collaborative PROJECT (not liveSession) this user currently has
+   *  open, if any — see startCollabProject/joinCollabProject in
+   *  projects.ts. Used to detect in real time when everyone has left a
+   *  collaboration, so it can auto-finalize (distribute personal copies,
+   *  see project.$projectId.tsx). */
+  currentCollabProjectId?: string | null;
 }
 
 export type PresenceMap = Record<string, PresenceEntry>;
@@ -82,6 +88,11 @@ export function stopPresence() {
 export function setCurrentSession(sessionId: string | null) {
   if (!currentUid) return;
   update(ref(rtdb(), `presence/${currentUid}`), { currentSessionId: sessionId }).catch(() => {});
+}
+
+export function setCurrentCollabProject(projectId: string | null) {
+  if (!currentUid) return;
+  update(ref(rtdb(), `presence/${currentUid}`), { currentCollabProjectId: projectId }).catch(() => {});
 }
 
 export function subscribePresence(cb: (map: PresenceMap) => void): () => void {
