@@ -148,6 +148,7 @@ function Editor() {
 
   // ── Selection actions bar (send to live lesson / new project) ──────
   const [selectedObjects, setSelectedObjects] = useState<CanvasObject[]>([]);
+  const [selectionViaMarquee, setSelectionViaMarquee] = useState(false);
   const [activeLiveSession, setActiveLiveSession] = useState<LiveSession | null | undefined>(undefined);
   useEffect(() => subscribeActiveSession(setActiveLiveSession), []);
   const isActiveSessionTeacher = !!user && !!activeLiveSession && activeLiveSession.teacherId === user.uid;
@@ -395,7 +396,7 @@ function Editor() {
                   isActive={isActive}
                   onSaveStatusChange={tab.id === "main" ? setSaveState : undefined}
                   onReady={tab.id === "main" ? (api) => { saveApiRef.current = api; } : undefined}
-                  onSelectionChange={tab.id === "main" ? setSelectedObjects : undefined}
+                  onSelectionChange={tab.id === "main" ? (objs, viaMarquee) => { setSelectedObjects(objs); setSelectionViaMarquee(viaMarquee); } : undefined}
                   liveSync={tab.id === "main" ? (!!shareSession || isWorkspaceRoomBoard) : false}
                   liveOwner={tab.id === "main" ? (!!shareSession || isWorkspaceRoomBoard) : false}
                   readOnly={tab.id === "main" ? readOnly : false}
@@ -403,7 +404,7 @@ function Editor() {
               </div>
             );
           })}
-          {!readOnly && (
+          {!readOnly && selectionViaMarquee && (
             <SelectionActionsBar
               selectedObjects={selectedObjects}
               onCreateNewProject={handleCreateNewProject}
