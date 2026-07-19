@@ -173,6 +173,16 @@ function LiveRoom() {
   const [leaveChoiceOpen, setLeaveChoiceOpen] = useState(false);
   const [selectedObjects, setSelectedObjects] = useState<CanvasObject[]>([]);
   const [selectionViaMarquee, setSelectionViaMarquee] = useState(false);
+  // Stable reference (useCallback) is essential here — an inline arrow
+  // function in JSX gets a NEW identity every render, which CanvasStage's
+  // notify-effect depends on, which calls it, which updates this state,
+  // which re-renders this component, which creates ANOTHER new inline
+  // function... an infinite loop (this is what caused the "Minified React
+  // error #185 / Maximum update depth exceeded" crash).
+  const handleSelectionChange = useCallback((objs: CanvasObject[], viaMarquee: boolean) => {
+    setSelectedObjects(objs);
+    setSelectionViaMarquee(viaMarquee);
+  }, []);
   const [leaveBusy, setLeaveBusy] = useState<"pause" | "end" | null>(null);
   const saveApiRef = useRef<{ save: () => Promise<void> } | null>(null);
 
@@ -748,7 +758,7 @@ function LiveRoom() {
                     setTool={setTool}
                     isActive={isActive}
                     onReady={isActive ? (api) => { saveApiRef.current = api; } : undefined}
-                    onSelectionChange={isActive ? (objs, viaMarquee) => { setSelectedObjects(objs); setSelectionViaMarquee(viaMarquee); } : undefined}
+                    onSelectionChange={isActive ? handleSelectionChange : undefined}
                     onSaveStatusChange={
                       !isTeacher && tab.kind === "collab" && myGroup && tab.mapId === myGroup.boardId
                         ? (status) => {
