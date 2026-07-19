@@ -58,6 +58,10 @@ import {
 import { toast } from "sonner";
 import { exportPNG, exportSVG, exportJSON } from "@/lib/canvas/export";
 import { mapStore } from "@/lib/canvas/storage";
+import { createProjectFromObjects } from "@/lib/projects";
+import { insertObjectsIntoBoard } from "@/lib/canvas/insert-into-board";
+import { SelectionActionsBar, type SendTarget } from "@/components/canvas/SelectionActionsBar";
+import type { CanvasObject } from "@/lib/canvas/types";
 import { QuotaWarningSurface } from "@/components/QuotaWarningSurface";
 
 // ── Route ──────────────────────────────────────────────────────────────
@@ -165,6 +169,7 @@ function LiveRoom() {
   const [groups, setGroups] = useState<GroupRoom[]>([]);
   const [manualSaving, setManualSaving] = useState(false);
   const [leaveChoiceOpen, setLeaveChoiceOpen] = useState(false);
+  const [selectedObjects, setSelectedObjects] = useState<CanvasObject[]>([]);
   const [leaveBusy, setLeaveBusy] = useState<"pause" | "end" | null>(null);
   const saveApiRef = useRef<{ save: () => Promise<void> } | null>(null);
 
@@ -390,6 +395,32 @@ function LiveRoom() {
     session.status === "paused" ||
     session.status === "ending" ||
     (!isTeacher && !isLiveOwner);
+
+  // ── Selection actions bar (send to another board / new project) ────
+  // Teacher only: send selected objects to any OTHER open board (main or
+  // any group) besides the one they're currently looking at. Students
+  // don't get this — "new project from selection" below still works for
+  // everyone.
+  const sendTargets: SendTarget[] = isTeacher
+    ? [
+        ...(activeTab?.mapId !== session.mainBoardId
+          ? [{ id: "main", mapId: session.mainBoardId, label: "📚 Κεντρικό μάθημα" }]
+          : []),
+        ...groups
+          .filter((g) => g.boardId !== activeTab?.mapId)
+          .map((g) => ({ id: g.id, mapId: g.boardId, label: `👥 ${g.name}` })),
+      ]
+    : [];
+
+  const handleCreateNewProjectFromSelection = async (objects: CanvasObject[]) => {
+    if (!user) return;
+    const newId = await createProjectFromObjects(user.uid, `${session.title} (επιλογή)`, objects, session.workspaceType);
+    window.open(`/project/${newId}`, "_blank");
+  };
+
+  const handleSendSelectionTo = async (target: SendTarget, objects: CanvasObject[]) => {
+    await insertObjectsIntoBoard(target.mapId, objects);
+  };
 
   const handlePauseAndLeave = async () => {
     setLeaveBusy("pause");
@@ -670,6 +701,7 @@ function LiveRoom() {
                     setTool={setTool}
                     isActive={isActive}
                     onReady={isActive ? (api) => { saveApiRef.current = api; } : undefined}
+                    onSelectionChange={isActive ? setSelectedObjects : undefined}
                     onSaveStatusChange={
                       !isTeacher && tab.kind === "collab" && myGroup && tab.mapId === myGroup.boardId
                         ? (status) => {
@@ -700,6 +732,14 @@ function LiveRoom() {
                 </div>
               );
             })
+          )}
+          {!isReadOnly && !isPresentationMode && (
+            <SelectionActionsBar
+              selectedObjects={selectedObjects}
+              onCreateNewProject={handleCreateNewProjectFromSelection}
+              sendTargets={sendTargets}
+              onSendTo={handleSendSelectionTo}
+            />
           )}
           </div>
         </div>
