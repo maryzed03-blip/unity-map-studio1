@@ -64,9 +64,9 @@ import {
   Check,
   Mail,
 } from "lucide-react";
-import { subscribeMySessions, sendInvitation, createLiveSession, subscribeReceivedDesigns, markDesignSaved, type ReceivedDesign } from "@/lib/live-sessions";
+import { subscribeMySessions, sendCollabProjectInvitation, subscribeReceivedDesigns, markDesignSaved, type ReceivedDesign } from "@/lib/live-sessions";
 import { WorkspaceRoomsPanel } from "@/components/rooms/WorkspaceRoomsPanel";
-import { getProject } from "@/lib/projects";
+import { getProject, startCollabProject } from "@/lib/projects";
 import {
   OnlineUsersPanel,
   usePresence,
@@ -899,22 +899,23 @@ function NewProjectButton() {
     }
   };
 
-  // Create collaborative session and invite selected users
+  // Create a lightweight collaborative project and invite selected users.
+  // Deliberately does NOT use createLiveSession — that's reserved for
+  // teacher-run classroom lessons and enforces "one active session per
+  // teacher", which is wrong here: any number of different people should
+  // be able to run their own simultaneous ad-hoc collaborations.
   const submitCollab = async () => {
-    if (!user || !profile || !title.trim()) return;
+    if (!user || !profile) return;
+    const finalTitle = title.trim() || `Συνεργασία — ${profile.displayName}`;
     setLoading(true);
     try {
-      const session = await createLiveSession({
-        teacherId: user.uid,
-        teacherName: profile.displayName,
-        title: title.trim(),
-        workspaceType: "free-drawing",
-      });
-      // Send invitations to all selected users
+      const projectId = await createProject(user.uid, finalTitle, "collaborative", "free-drawing");
+      await startCollabProject(projectId, user.uid);
       await Promise.all(
         Array.from(selected).map((uid) =>
-          sendInvitation({
-            sessionId: session.id,
+          sendCollabProjectInvitation({
+            projectId,
+            projectTitle: finalTitle,
             fromUserId: user.uid,
             fromUserName: profile.displayName,
             toUserId: uid,
@@ -925,7 +926,7 @@ function NewProjectButton() {
         toast.success(`Προσκλήσεις στάλθηκαν σε ${selected.size} άτομα`);
       }
       onOpenChange(false);
-      navigate({ to: "/live/$sessionId", params: { sessionId: session.id } });
+      navigate({ to: "/project/$projectId", params: { projectId } });
     } catch (e) {
       console.error(e);
       const msg = e instanceof Error ? e.message : "Δεν ήταν δυνατή η δημιουργία";
@@ -1021,7 +1022,7 @@ function NewProjectButton() {
                   value={title}
                   autoFocus
                   onChange={(e) => setTitle(e.target.value)}
-                  placeholder="π.χ. Ομαδική εργασία"
+                  placeholder="π.χ. Ομαδική εργασία (προαιρετικό)"
                 />
               </div>
 
@@ -1068,7 +1069,7 @@ function NewProjectButton() {
               <Button variant="outline" onClick={() => setStep("pick-mode")}>Πίσω</Button>
               <Button
                 onClick={submitCollab}
-                disabled={loading || !title.trim()}
+                disabled={loading}
                 className="gap-2"
               >
                 {loading && <Loader2 className="h-4 w-4 animate-spin" />}
