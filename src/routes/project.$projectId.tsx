@@ -1,5 +1,5 @@
 import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useAuth } from "@/lib/auth-context";
 import { ClientOnly } from "@/lib/client-only";
 import { getProject, createProjectFromObjects, type Project } from "@/lib/projects";
@@ -149,6 +149,13 @@ function Editor() {
   // ── Selection actions bar (send to live lesson / new project) ──────
   const [selectedObjects, setSelectedObjects] = useState<CanvasObject[]>([]);
   const [selectionViaMarquee, setSelectionViaMarquee] = useState(false);
+  // Stable reference is essential — see the matching comment in
+  // live.$sessionId.tsx for why an inline arrow function here causes an
+  // infinite render loop.
+  const handleSelectionChange = useCallback((objs: CanvasObject[], viaMarquee: boolean) => {
+    setSelectedObjects(objs);
+    setSelectionViaMarquee(viaMarquee);
+  }, []);
   const [activeLiveSession, setActiveLiveSession] = useState<LiveSession | null | undefined>(undefined);
   useEffect(() => subscribeActiveSession(setActiveLiveSession), []);
   const isActiveSessionTeacher = !!user && !!activeLiveSession && activeLiveSession.teacherId === user.uid;
@@ -396,7 +403,7 @@ function Editor() {
                   isActive={isActive}
                   onSaveStatusChange={tab.id === "main" ? setSaveState : undefined}
                   onReady={tab.id === "main" ? (api) => { saveApiRef.current = api; } : undefined}
-                  onSelectionChange={tab.id === "main" ? (objs, viaMarquee) => { setSelectedObjects(objs); setSelectionViaMarquee(viaMarquee); } : undefined}
+                  onSelectionChange={tab.id === "main" ? handleSelectionChange : undefined}
                   liveSync={tab.id === "main" ? (!!shareSession || isWorkspaceRoomBoard) : false}
                   liveOwner={tab.id === "main" ? (!!shareSession || isWorkspaceRoomBoard) : false}
                   readOnly={tab.id === "main" ? readOnly : false}
