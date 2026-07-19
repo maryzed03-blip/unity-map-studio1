@@ -15,16 +15,15 @@ import {
   query,
   serverTimestamp,
   where,
-  limit,
   arrayUnion,
   arrayRemove,
   type Unsubscribe,
 } from "firebase/firestore";
 import { db } from "./firebase";
 import { createProject, type WorkspaceType } from "./projects";
-import { cAddDoc, cGetDoc, cGetDocs, cOnSnapshot, cUpdateDoc } from "./quota-guard";
+import { cAddDoc, cGetDoc, cGetDocs, cOnSnapshot, cSetDoc, cUpdateDoc } from "./quota-guard";
 
-export type LiveSessionStatus = "active" | "paused" | "ended";
+export type LiveSessionStatus = "active" | "paused" | "ending" | "ended";
 export type InvitationStatus = "pending" | "accepted" | "declined" | "expired" | "cancelled";
 
 export interface LiveSession {
@@ -60,6 +59,23 @@ export interface GroupRoom {
   participantIds: string[];
   createdBy: string;
   createdAt?: unknown;
+}
+
+/** Per-student participation record within a group room — lives at
+ *  liveSessions/{sid}/groupRooms/{gid}/members/{uid}. Kept even after a
+ *  student leaves the group (isCurrentMember: false) so contribution
+ *  history survives group switches, and so end-of-session distribution
+ *  knows exactly who actually worked on this board. Written by the
+ *  student's own browser (self-tracking) — see recordGroupJoin/Leave/
+ *  markGroupContribution below. */
+export interface GroupMember {
+  userId: string;
+  displayName: string;
+  joinedAt?: unknown;
+  leftAt?: unknown | null;
+  isCurrentMember: boolean;
+  contributed: boolean;
+  firstContributionAt?: unknown | null;
 }
 
 export interface Invitation {
@@ -198,19 +214,27 @@ export function subscribeTeacherSession(
 // simply whichever liveSession is currently active. Used by
 // LiveClassButton (replaces the old browsable "live lessons" list).
 export function subscribeActiveSession(cb: (s: LiveSession | null) => void): Unsubscribe {
-  // Deliberately NOT combined with orderBy: a single equality filter uses
-  // Firestore's automatic single-field index, while equality + orderBy on
-  // a different field would need a composite index to be created manually
-  // in the Firebase console first. "Only one active session per teacher"
-  // is already enforced at creation time, so in practice there's at most
-  // one result; limit(1) just caps the (rare) multi-teacher edge case.
-  const q = query(collection(db(), "liveSessions"), where("status", "==", "active"), limit(1));
+  // Deliberately NOT combined with orderBy in the query itself: equality +
+  // orderBy on a different field needs a composite index created manually
+  // in the Firebase console first. Instead, fetch all "active" sessions
+  // (normally just one) and pick the most recently updated client-side —
+  // this matters because stale orphaned sessions from earlier testing can
+  // be left marked "active" too, and an arbitrary Firestore pick among
+  // them could grab the wrong one, leaving the student-side LIVE badge
+  // permanently grey even though the teacher really is in a (different)
+  // active session.
+  const q = query(collection(db(), "liveSessions"), where("status", "==", "active"));
   return cOnSnapshot(q, (snap) => {
     const qs = snap as unknown as {
       docs: Array<{ id: string; data: () => Omit<LiveSession, "id"> }>;
     };
-    const row = qs.docs[0];
-    cb(row ? { id: row.id, ...row.data() } : null);
+    const rows = qs.docs.map((d) => ({ id: d.id, ...d.data() }));
+    rows.sort((a, b) => {
+      const at = (a.updatedAt as { toMillis?: () => number } | undefined)?.toMillis?.() ?? 0;
+      const bt = (b.updatedAt as { toMillis?: () => number } | undefined)?.toMillis?.() ?? 0;
+      return bt - at;
+    });
+    cb(rows[0] ?? null);
   });
 }
 
@@ -322,6 +346,67 @@ export async function deleteGroupRoom(sessionId: string, roomId: string) {
 /** Student picks their own group — e.g. "όποια ομάδα έχετε στο Zoom, μπείτε εκεί"
  *  — without needing the teacher to assign them one by one. Removes them from
  *  any other group first (a student can only be in one group at a time). */
+/** Called by a student's own browser the moment they become a current
+ *  member of a group (self-join via "Είσοδος", or the teacher assigning
+ *  them — either way their OWN browser records it once it sees itself in
+ *  participantIds). First-ever join creates the record with
+ *  contributed:false; a later rejoin only flips isCurrentMember back on
+ *  without touching prior contribution history. */
+export async function recordGroupJoin(
+  sessionId: string,
+  groupId: string,
+  userId: string,
+  displayName: string,
+): Promise<void> {
+  const ref = doc(db(), "liveSessions", sessionId, "groupRooms", groupId, "members", userId);
+  const existing = await cGetDoc(ref);
+  if (existing.exists()) {
+    await cUpdateDoc(ref, { isCurrentMember: true, leftAt: null, displayName });
+  } else {
+    await cSetDoc(ref, {
+      userId,
+      displayName,
+      joinedAt: serverTimestamp(),
+      leftAt: null,
+      isCurrentMember: true,
+      contributed: false,
+      firstContributionAt: null,
+    });
+  }
+}
+
+/** Called by a student's own browser when they stop being a current
+ *  member of a group (left themselves, reassigned elsewhere, or removed
+ *  by the teacher). Keeps the record — just flips isCurrentMember off —
+ *  so contribution history survives for end-of-session distribution. */
+export async function recordGroupLeave(sessionId: string, groupId: string, userId: string): Promise<void> {
+  const ref = doc(db(), "liveSessions", sessionId, "groupRooms", groupId, "members", userId);
+  await cUpdateDoc(ref, { isCurrentMember: false, leftAt: serverTimestamp() }).catch(() => {});
+}
+
+/** Marks a student as having made at least one real edit on their
+ *  group's board. Called once client-side on first genuine change (see
+ *  the group-tab save-status wiring in live.$sessionId.tsx) — the
+ *  one-time guard lives there, this just needs to be safe to call. */
+export async function markGroupContribution(sessionId: string, groupId: string, userId: string): Promise<void> {
+  const ref = doc(db(), "liveSessions", sessionId, "groupRooms", groupId, "members", userId);
+  await cSetDoc(ref, { contributed: true, firstContributionAt: serverTimestamp() }, { merge: true }).catch(() => {});
+}
+
+export function subscribeGroupMembers(
+  sessionId: string,
+  groupId: string,
+  cb: (members: GroupMember[]) => void,
+): Unsubscribe {
+  return cOnSnapshot(
+    collection(db(), "liveSessions", sessionId, "groupRooms", groupId, "members"),
+    (snap) => {
+      const qs = snap as unknown as { docs: Array<{ data: () => GroupMember }> };
+      cb(qs.docs.map((d) => d.data()));
+    },
+  );
+}
+
 export async function joinGroupRoom(sessionId: string, roomId: string, studentId: string) {
   const rooms = await cGetDocs(collection(db(), "liveSessions", sessionId, "groupRooms"));
   for (const r of rooms.docs) {
@@ -568,69 +653,141 @@ export async function setPresentingBoard(sessionId: string, boardId: string | nu
 
 /** Save all group rooms to participants' lobbies and end the session safely.
  *  Returns { saved: number, failed: string[] } so caller can abort on failure. */
+export interface EndSessionFailure {
+  groupId: string;
+  groupName: string;
+  studentId: string;
+  studentName: string;
+}
+
+export interface EndSessionResult {
+  ended: boolean;
+  distributed: number;
+  failed: EndSessionFailure[];
+}
+
+/** Ends a live session, distributing each group's FINAL board to every
+ *  student who actually contributed to it (not just anyone who briefly
+ *  joined) as an independent personal copy in their own lobby.
+ *
+ *  Safe to call more than once (double-click, network retry): copy IDs
+ *  are deterministic (`livecopy_{sessionId}_{groupId}_{studentId}`), so
+ *  a re-run skips everything that already succeeded and only retries
+ *  what previously failed. The session only flips to "ended" once every
+ *  contributor's copy exists; until then it sits in "ending" (locked for
+ *  editing, but resumable-by-retry) so nothing is ever silently lost. */
 export async function endSessionAndSave(
   sessionId: string,
   teacherId: string,
-): Promise<{ saved: number; failed: string[] }> {
+  teacherName: string,
+): Promise<EndSessionResult> {
   const { mapStore } = await import("@/lib/canvas/storage");
   const { forceSaveBoard } = await import("@/lib/canvas/live-autosave");
-  const { createProject } = await import("@/lib/projects");
 
-  // Load all group rooms
-  const roomsSnap = await cGetDocs(
-    query(collection(db(), "liveSessions", sessionId, "groupRooms")),
-  );
-  const rooms = roomsSnap.docs.map((d) => ({
-    id: d.id,
-    ...(d.data() as Omit<GroupRoom, "id">),
-  }));
+  // Step 1: lock out further editing app-wide while we finish saving.
+  await cUpdateDoc(doc(db(), "liveSessions", sessionId), {
+    status: "ending" as LiveSessionStatus,
+    updatedAt: serverTimestamp(),
+  });
 
-  const failed: string[] = [];
-  let saved = 0;
+  const sessionSnap = await cGetDoc(doc(db(), "liveSessions", sessionId));
+  const sessionData = sessionSnap.exists() ? (sessionSnap.data() as Omit<LiveSession, "id">) : undefined;
+  const lessonTitle = sessionData?.title ?? "Ζωντανό μάθημα";
+  const dateLabel = new Date().toLocaleDateString("el-GR", { day: "2-digit", month: "2-digit", year: "numeric" });
 
-  // Step 1: Force-save each room's current snapshot to the server (with retry)
+  const roomsSnap = await cGetDocs(query(collection(db(), "liveSessions", sessionId, "groupRooms")));
+  const rooms = roomsSnap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<GroupRoom, "id">) }));
+
+  const failed: EndSessionFailure[] = [];
+  let distributed = 0;
+
   for (const room of rooms) {
+    const membersSnap = await cGetDocs(
+      collection(db(), "liveSessions", sessionId, "groupRooms", room.id, "members"),
+    );
+    const contributors = membersSnap.docs
+      .map((d) => d.data() as GroupMember)
+      .filter((m) => m.contributed);
+    if (contributors.length === 0) continue; // nobody actually worked here — nothing to save
+
+    // Step 3: final snapshot save, retried up to 3x.
     const state = await mapStore.load(room.boardId);
     if (state) {
       const r = await forceSaveBoard(room.boardId, state, 3);
       if (!r.ok) {
-        failed.push(`${room.name} (snapshot)`);
-        continue; // don't distribute if snapshot failed
+        contributors.forEach((m) =>
+          failed.push({ groupId: room.id, groupName: room.name, studentId: m.userId, studentName: m.displayName }),
+        );
+        continue; // can't distribute a board we couldn't even save
       }
     }
 
-    // Step 2: Distribute a copy to each participant's lobby (ONLY their participants)
-    const participants = [...new Set([...room.participantIds, teacherId])];
-    for (const uid of participants) {
+    const groupMemberNames = contributors.map((m) => m.displayName);
+    const title = `Ζωντανό μάθημα – ${room.name} – ${lessonTitle} – ${dateLabel}`;
+
+    // Step 5 + 9: one personal copy per contributor, deterministic ID so
+    // re-running this after a partial failure never creates duplicates.
+    for (const member of contributors) {
+      const copyId = `livecopy_${sessionId}_${room.id}_${member.userId}`;
       try {
-        const newId = await createProject(uid, room.name, "collaborative", "free-drawing");
-        if (state) {
-          const saveR = await forceSaveBoard(newId, state, 3);
-          if (!saveR.ok) throw new Error(saveR.error);
+        const existing = await cGetDoc(doc(db(), "projects", copyId));
+        if (!existing.exists()) {
+          await cSetDoc(doc(db(), "projects", copyId), {
+            ownerId: member.userId,
+            title,
+            status: "draft",
+            projectType: "collaborative",
+            mode: "solo",
+            workspaceType: sessionData?.workspaceType ?? "free-drawing",
+            sourceMapId: null,
+            liveSessionId: null,
+            originLabel: `🎓 Τελικό σχέδιο ζωντανού μαθήματος — ${groupMemberNames.join(", ")}`,
+            sourceType: "live-group-final",
+            sourceSessionId: sessionId,
+            sourceGroupId: room.id,
+            groupName: room.name,
+            groupMemberNames,
+            lessonTitle,
+            lessonDate: serverTimestamp(),
+            teacherId,
+            teacherName,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+            copiedAt: serverTimestamp(),
+          });
         }
-        await cUpdateDoc(doc(db(), "projects", newId), {
-          sourceSessionId: sessionId,
-          sourceRoomId: room.id,
-          sessionParticipants: room.participantIds,
-          savedAt: serverTimestamp(),
-        });
-        saved++;
+        if (state) {
+          const sanitized = JSON.parse(JSON.stringify(state));
+          await cSetDoc(
+            doc(db(), "projects", copyId, "snapshots", "current"),
+            { payload: sanitized, schemaVersion: 1, isCurrent: true, savedAt: serverTimestamp() },
+            { merge: true },
+          );
+        }
+        distributed++;
       } catch (e) {
-        console.error(`Failed to save room ${room.id} for user ${uid}`, e);
-        failed.push(`${room.name} → ${uid.slice(0, 6)}`);
+        console.error(`Failed to distribute group ${room.id} to ${member.userId}`, e);
+        failed.push({ groupId: room.id, groupName: room.name, studentId: member.userId, studentName: member.displayName });
       }
     }
   }
 
-  // Step 3: Only mark session as ended if ALL saves succeeded
+  // Step 6/7: only finalize (and clean up, step 8) once EVERYTHING succeeded.
   if (failed.length === 0) {
     await cUpdateDoc(doc(db(), "liveSessions", sessionId), {
       status: "ended" as LiveSessionStatus,
       endedAt: serverTimestamp(),
+      editPermissions: [],
+      teacherInRoomId: null,
+      presentingBoardId: null,
+      presentingRoomId: null,
+      groupRoomsActive: false,
     });
+    return { ended: true, distributed, failed: [] };
   }
-
-  return { saved, failed };
+  // Left in "ending" — locked, not yet finalized — so the teacher can
+  // press the same button again to retry only what failed.
+  return { ended: false, distributed, failed };
 }
 
 // ── Activate / announce a session ─────────────────────────────────────
