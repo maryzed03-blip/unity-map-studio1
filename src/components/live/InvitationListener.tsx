@@ -1,6 +1,15 @@
 // InvitationListener — mounted once in AppShell.
 // Shows toast for each pending invitation exactly ONCE per user per session.
 // Uses localStorage to track dismissed invitations so they never re-appear.
+//
+// IMPORTANT: the invitation doc is deleted only AFTER the user actually
+// responds (accept/decline), never at display time. Deleting it early
+// used to look harmless, but once the recipient legitimately gained
+// delete permission on their own invitations, it created a race: by the
+// time someone clicked "Αποδοχή" seconds later, the doc was already gone,
+// and re-reading a deleted doc under these security rules throws instead
+// of just returning exists:false — surfacing as "Αποτυχία αποδοχής"
+// every single time. Cleanup now happens strictly after the response.
 
 import { useEffect, useRef } from "react";
 import { useAuth } from "@/lib/auth-context";
@@ -52,10 +61,9 @@ export function InvitationListener() {
         const isLessonPaused = type === "lesson_paused";
         const isCollabProject = type === "collab_project";
 
-        // Always delete from Firestore so it stops appearing in queries
-        deleteInvitation(inv.id).catch(() => {});
-
         if (isLessonPaused) {
+          // Informational only, no response needed — safe to clean up now.
+          deleteInvitation(inv.id).catch(() => {});
           toast(`⏸ Το μάθημα "${lessonTitle}" διακόπηκε`, { duration: 8_000 });
           continue;
         }
@@ -68,9 +76,11 @@ export function InvitationListener() {
               onClick: async () => {
                 try {
                   const sid = await respondToInvitation(inv.id, true, user.uid);
+                  deleteInvitation(inv.id).catch(() => {});
                   if (sid) navigate({ to: "/live/$sessionId", params: { sessionId: sid } });
                   else navigate({ to: "/lobby" });
                 } catch {
+                  deleteInvitation(inv.id).catch(() => {});
                   navigate({ to: "/lobby" });
                 }
               },
@@ -87,13 +97,17 @@ export function InvitationListener() {
               onClick: async () => {
                 try {
                   const pid = await respondToInvitation(inv.id, true, user.uid);
+                  deleteInvitation(inv.id).catch(() => {});
                   if (pid) navigate({ to: "/project/$projectId", params: { projectId: pid } });
                 } catch { toast.error("Αποτυχία αποδοχής"); }
               },
             },
             cancel: {
               label: "Άρνηση",
-              onClick: () => respondToInvitation(inv.id, false, user.uid).catch(() => {}),
+              onClick: async () => {
+                await respondToInvitation(inv.id, false, user.uid).catch(() => {});
+                deleteInvitation(inv.id).catch(() => {});
+              },
             },
           });
           continue;
@@ -107,13 +121,17 @@ export function InvitationListener() {
             onClick: async () => {
               try {
                 const sid = await respondToInvitation(inv.id, true, user.uid);
+                deleteInvitation(inv.id).catch(() => {});
                 if (sid) navigate({ to: "/live/$sessionId", params: { sessionId: sid } });
               } catch { toast.error("Αποτυχία αποδοχής"); }
             },
           },
           cancel: {
             label: "Άρνηση",
-            onClick: () => respondToInvitation(inv.id, false, user.uid).catch(() => {}),
+            onClick: async () => {
+              await respondToInvitation(inv.id, false, user.uid).catch(() => {});
+              deleteInvitation(inv.id).catch(() => {});
+            },
           },
         });
       }
