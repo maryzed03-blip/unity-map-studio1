@@ -51,13 +51,57 @@ service cloud.firestore {
       return isSignedIn()
         && exists(/databases/$(database)/documents/projects/$(pid)/members/$(request.auth.uid));
     }
+    // A live-session board (main lesson board OR a group board — both get
+    // `liveSessionId` set at creation, see live-sessions.ts) is readable
+    // and writable by anyone actually in that session right now, not just
+    // its owner. Nothing in the app ever populates the members/
+    // subcollection for students, so without this, isProjectMember() above
+    // is always false for them and live boards were unreadable/unwritable
+    // by any student — this is what silently broke live sync.
+    function isLiveSessionPeer(pid) {
+      return isSignedIn()
+        && ("liveSessionId" in projectDoc(pid))
+        && projectDoc(pid).liveSessionId != null
+        && (
+          get(/databases/$(database)/documents/liveSessions/$(projectDoc(pid).liveSessionId)).data.teacherId == request.auth.uid
+          || request.auth.uid in get(/databases/$(database)/documents/liveSessions/$(projectDoc(pid).liveSessionId)).data.participantIds
+        );
+    }
+    // End-of-lesson personal-copy distribution (see endSessionAndSave in
+    // live-sessions.ts): the TEACHER's browser creates one project per
+    // contributing student, owned by that student, not the teacher. That
+    // would normally fail create's "ownerId == request.auth.uid" check —
+    // this is a narrow, self-contained exception: only lets it through
+    // when the new doc's own sourceSessionId proves (via a fresh get())
+    // that the caller really is that exact session's teacher AND the
+    // target ownerId really is a participant of that exact session.
+    // Nothing else about the new doc is trusted or exempted.
+    function isDistributingToParticipant() {
+      return isSignedIn()
+        && ("sourceSessionId" in request.resource.data)
+        && request.resource.data.sourceSessionId is string
+        && get(/databases/$(database)/documents/liveSessions/$(request.resource.data.sourceSessionId)).data.teacherId == request.auth.uid
+        && request.resource.data.ownerId
+             in get(/databases/$(database)/documents/liveSessions/$(request.resource.data.sourceSessionId)).data.participantIds;
+    }
+    // Same idea for that copy's own snapshot doc, read off the ALREADY
+    // created parent project (so it must have sourceSessionId set by the
+    // create above, which only the exception just above could achieve).
+    function isDistributedCopySnapshot(pid) {
+      return isSignedIn()
+        && ("sourceSessionId" in projectDoc(pid))
+        && projectDoc(pid).sourceSessionId != null
+        && get(/databases/$(database)/documents/liveSessions/$(projectDoc(pid).sourceSessionId)).data.teacherId == request.auth.uid
+        && projectDoc(pid).ownerId
+             in get(/databases/$(database)/documents/liveSessions/$(projectDoc(pid).sourceSessionId)).data.participantIds;
+    }
 
     match /projects/{projectId} {
       allow read: if isSignedIn()
-        && (resource.data.ownerId == request.auth.uid || isProjectMember(projectId));
+        && (resource.data.ownerId == request.auth.uid || isProjectMember(projectId) || isLiveSessionPeer(projectId));
 
       allow create: if isSignedIn()
-        && request.resource.data.ownerId == request.auth.uid;
+        && (request.resource.data.ownerId == request.auth.uid || isDistributingToParticipant());
 
       allow update: if isSignedIn()
         && resource.data.ownerId == request.auth.uid
@@ -77,7 +121,7 @@ service cloud.firestore {
 
       // ── snapshots subcollection ──
       match /snapshots/{snapshotId} {
-        allow read, write: if isProjectOwner(projectId) || isProjectMember(projectId);
+        allow read, write: if isProjectOwner(projectId) || isProjectMember(projectId) || isLiveSessionPeer(projectId) || isDistributedCopySnapshot(projectId);
       }
     }
 
@@ -122,7 +166,34 @@ service cloud.firestore {
       // ── groupRooms subcollection ──
       match /groupRooms/{roomId} {
         allow read: if isSessionTeacher(sessionId) || isSessionParticipant(sessionId);
-        allow write: if isSessionTeacher(sessionId);
+
+        // Teacher: full control (create/delete groups, assign/move anyone).
+        // A session participant may also write, but ONLY a change that adds
+        // or removes exactly themselves from participantIds — covers the
+        // student-facing "Είσοδος" (join) / "Έξοδος" (leave) buttons.
+        allow write: if isSessionTeacher(sessionId)
+          || (
+            isSessionParticipant(sessionId)
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['participantIds'])
+            && request.resource.data.participantIds.toSet()
+                 .difference(resource.data.participantIds.toSet())
+                 .union(
+                   resource.data.participantIds.toSet()
+                     .difference(request.resource.data.participantIds.toSet())
+                 )
+               == [request.auth.uid].toSet()
+          );
+
+        // ── members subcollection — per-student join/leave/contribution
+        // history (see recordGroupJoin/Leave/markGroupContribution in
+        // live-sessions.ts). Written entirely by each student's OWN
+        // browser about THEIR OWN record — never on behalf of anyone
+        // else. The teacher reads this (not writes) to decide who
+        // actually contributed when distributing final copies.
+        match /members/{memberUid} {
+          allow read: if isSessionTeacher(sessionId) || isSessionParticipant(sessionId);
+          allow write: if isSelf(memberUid) && isSessionParticipant(sessionId);
+        }
       }
     }
 

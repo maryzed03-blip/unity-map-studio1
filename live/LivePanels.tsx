@@ -590,15 +590,15 @@ export function TeacherSessionPanel({
   const handleEndSession = async () => {
     setEndingSession(true);
     try {
-      const { saved, failed } = await endSessionAndSave(session.id, user.uid);
-      if (failed.length > 0) {
-        toast.error(`Αποτυχία αποθήκευσης ${failed.length} σχεδίων. Το μάθημα ΔΕΝ έκλεισε.`, {
-          description: failed.join(", "),
+      const { ended, distributed, failed } = await endSessionAndSave(session.id, user.uid, profile?.displayName ?? "Καθηγητής");
+      if (!ended) {
+        toast.error(`Αποτυχία αποθήκευσης για ${failed.length} μαθητή/ές. Το μάθημα ΔΕΝ έκλεισε — πατήστε ξανά "Οριστική Λήξη" για επανάληψη.`, {
+          description: failed.map((f) => `${f.groupName} → ${f.studentName}`).join(", "),
           duration: 10000,
         });
         return;
       }
-      toast.success(`Το μάθημα έληξε οριστικά. ${saved} σχέδια αποθηκεύτηκαν.`);
+      toast.success(distributed > 0 ? `Το μάθημα έληξε οριστικά. ${distributed} σχέδια μοιράστηκαν στους μαθητές.` : "Το μάθημα έληξε οριστικά.");
       setEndChoiceOpen(false);
     } catch (e) {
       toast.error("Αποτυχία αποθήκευσης. Το μάθημα ΔΕΝ έκλεισε.");

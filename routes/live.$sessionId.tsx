@@ -2,7 +2,17 @@ import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAuth } from "@/lib/auth-context";
 import { ClientOnly } from "@/lib/client-only";
-import { subscribeSession, pauseSession, resumeSession, notifySessionPaused, endSessionAndSave, type LiveSession } from "@/lib/live-sessions";
+import {
+  subscribeSession,
+  pauseSession,
+  resumeSession,
+  notifySessionPaused,
+  endSessionAndSave,
+  recordGroupJoin,
+  recordGroupLeave,
+  markGroupContribution,
+  type LiveSession,
+} from "@/lib/live-sessions";
 import { setCurrentSession } from "@/lib/presence";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -147,7 +157,7 @@ function EndedSessionBar({ session }: { session: LiveSession }) {
 
 function LiveRoom() {
   const { sessionId } = Route.useParams();
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
   const navigate = useNavigate();
   const [session, setSession] = useState<LiveSession | null | undefined>(undefined);
   const [tool, setTool] = useState<ToolId>("select");
@@ -296,11 +306,13 @@ function LiveRoom() {
   // boards — instead of silently swapping their one-and-only canvas.
   const lastNotifiedGroupRef = useRef<string | null>(null);
   const hasNotifiedOnceRef = useRef(false);
+  const contributedGroupsRef = useRef(new Set<string>());
   useEffect(() => {
     if (!user || isTeacher) return;
     const myGroup = groups.find((g) => g.participantIds.includes(user.uid));
     const myGroupId = myGroup?.id ?? null;
     if (myGroupId !== lastNotifiedGroupRef.current) {
+      const prevGroupId = lastNotifiedGroupRef.current;
       if (myGroup) {
         toast.success(`Είστε στην ομάδα «${myGroup.name}»`, { duration: 5000 });
         openRoomTab(myGroup.id, myGroup.boardId, `👥 ${myGroup.name}`);
@@ -308,6 +320,8 @@ function LiveRoom() {
         // previous group) so it can't linger around still editable —
         // openRoomTab above already made the new group's tab active.
         setTabs((prev) => prev.filter((t) => t.kind !== "collab" || t.mapId === myGroup.boardId));
+        recordGroupJoin(sessionId, myGroup.id, user.uid, profile?.displayName ?? "Μαθητής").catch(() => {});
+        if (prevGroupId) recordGroupLeave(sessionId, prevGroupId, user.uid).catch(() => {});
       } else {
         if (hasNotifiedOnceRef.current) toast.info("Βγήκατε από την ομάδα", { duration: 3000 });
         // Left every group — drop any lingering collab tab and, if that
@@ -317,11 +331,12 @@ function LiveRoom() {
           if (stillActive) setActiveTabId("main");
           return prev.filter((t) => t.kind !== "collab");
         });
+        if (prevGroupId) recordGroupLeave(sessionId, prevGroupId, user.uid).catch(() => {});
       }
       lastNotifiedGroupRef.current = myGroupId;
       hasNotifiedOnceRef.current = true;
     }
-  }, [groups, user, isTeacher, openRoomTab]);
+  }, [groups, user, profile, isTeacher, openRoomTab, sessionId]);
 
   // Guard conditions — all hooks must be above these
   if (session === undefined) return <div className="min-h-screen flex items-center justify-center"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>;
@@ -373,6 +388,7 @@ function LiveRoom() {
   const isReadOnly =
     session.status === "ended" ||
     session.status === "paused" ||
+    session.status === "ending" ||
     (!isTeacher && !isLiveOwner);
 
   const handlePauseAndLeave = async () => {
@@ -391,16 +407,16 @@ function LiveRoom() {
     if (!user) return;
     setLeaveBusy("end");
     try {
-      const { saved, failed } = await endSessionAndSave(session.id, user.uid);
-      if (failed.length > 0) {
-        toast.error(`Αποτυχία αποθήκευσης ${failed.length} σχεδίων. Το μάθημα ΔΕΝ έκλεισε.`, {
-          description: failed.join(", "),
+      const { ended, distributed, failed } = await endSessionAndSave(session.id, user.uid, profile?.displayName ?? "Καθηγητής");
+      if (!ended) {
+        toast.error(`Αποτυχία αποθήκευσης για ${failed.length} μαθητή/ές. Το μάθημα ΔΕΝ έκλεισε.`, {
+          description: failed.map((f) => `${f.groupName} → ${f.studentName}`).join(", "),
           duration: 10000,
         });
         setLeaveBusy(null);
         return;
       }
-      toast.success(`Το μάθημα έληξε οριστικά. ${saved} σχέδια αποθηκεύτηκαν.`);
+      toast.success(distributed > 0 ? `Το μάθημα έληξε οριστικά. ${distributed} σχέδια μοιράστηκαν στους μαθητές.` : "Το μάθημα έληξε οριστικά.");
       navigate({ to: "/lobby" });
     } catch {
       toast.error("Αποτυχία αποθήκευσης. Το μάθημα ΔΕΝ έκλεισε.");
@@ -461,8 +477,17 @@ function LiveRoom() {
           <div className="flex items-center gap-2 min-w-0">
             <Radio className="h-4 w-4 text-[color:var(--success)] shrink-0 animate-pulse" />
             <span className="text-sm font-semibold truncate">{session.title}</span>
-            <Badge variant={session.status === "active" ? "default" : session.status === "paused" ? "outline" : "secondary"} className="shrink-0">
-              {session.status === "active" ? "Σε εξέλιξη" : session.status === "paused" ? "⏸ Διακοπή" : "Έληξε"}
+            <Badge
+              variant={session.status === "active" ? "default" : session.status === "paused" ? "outline" : session.status === "ending" ? "outline" : "secondary"}
+              className="shrink-0"
+            >
+              {session.status === "active"
+                ? "Σε εξέλιξη"
+                : session.status === "paused"
+                  ? "⏸ Διακοπή"
+                  : session.status === "ending"
+                    ? "🔒 Αποθήκευση…"
+                    : "Έληξε"}
             </Badge>
           </div>
         </div>
@@ -517,6 +542,19 @@ function LiveRoom() {
 
       {/* Ended bar */}
       {session.status === "ended" && <EndedSessionBar session={session} />}
+      {session.status === "ending" && (
+        <div className="shrink-0 border-b border-border bg-blue-50 dark:bg-blue-950/20 px-4 py-3 flex items-center gap-3">
+          <Loader2 className="h-4 w-4 animate-spin text-blue-700 dark:text-blue-300" />
+          <div>
+            <p className="text-sm font-semibold text-blue-800 dark:text-blue-200">
+              Το μάθημα ολοκληρώνεται
+            </p>
+            <p className="text-xs text-blue-700 dark:text-blue-300">
+              Αποθηκεύονται τα τελικά σχέδια. Δεν μπορείτε να κάνετε άλλες αλλαγές αυτή τη στιγμή.
+            </p>
+          </div>
+        </div>
+      )}
       {session.status === "paused" && !isTeacher && (
         <div className="shrink-0 border-b border-border bg-amber-50 dark:bg-amber-950/20 px-4 py-3 flex items-center gap-3">
           <span className="text-lg">⏸</span>
@@ -632,6 +670,16 @@ function LiveRoom() {
                     setTool={setTool}
                     isActive={isActive}
                     onReady={isActive ? (api) => { saveApiRef.current = api; } : undefined}
+                    onSaveStatusChange={
+                      !isTeacher && tab.kind === "collab" && myGroup && tab.mapId === myGroup.boardId
+                        ? (status) => {
+                            if (status === "saved" && user && !contributedGroupsRef.current.has(myGroup.id)) {
+                              contributedGroupsRef.current.add(myGroup.id);
+                              markGroupContribution(sessionId, myGroup.id, user.uid).catch(() => {});
+                            }
+                          }
+                        : undefined
+                    }
                     liveSync={session.status === "active"}
                     liveOwner={
                       isTeacher
@@ -645,6 +693,7 @@ function LiveRoom() {
                         ? isReadOnly
                         : session.status === "ended" ||
                           session.status === "paused" ||
+                          session.status === "ending" ||
                           (tab.kind === "collab" && tab.mapId === myGroup?.boardId ? false : !studentHasEditOnMain)
                     }
                   />
