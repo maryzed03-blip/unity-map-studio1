@@ -489,17 +489,54 @@ export async function respondToInvitation(invitationId: string, accept: boolean,
   const ref = doc(db(), "invitations", invitationId);
   const snap = await cGetDoc(ref);
   if (!snap.exists()) return null;
-  const inv = snap.data() as Omit<Invitation, "id">;
+  const inv = snap.data() as Omit<Invitation, "id"> & { type?: string; projectId?: string };
   if (inv.toUserId !== uid) throw new Error("Not your invitation");
   await cUpdateDoc(ref, { status: accept ? "accepted" : "declined" });
-  if (accept) {
-    await cUpdateDoc(doc(db(), "liveSessions", inv.sessionId), {
-      participantIds: arrayUnion(uid),
-      updatedAt: serverTimestamp(),
-    });
-    return inv.sessionId;
+  if (!accept) return null;
+  if (inv.type === "collab_project" && inv.projectId) {
+    const { joinCollabProject } = await import("./projects");
+    await joinCollabProject(inv.projectId, uid);
+    return inv.projectId;
   }
-  return null;
+  await cUpdateDoc(doc(db(), "liveSessions", inv.sessionId), {
+    participantIds: arrayUnion(uid),
+    updatedAt: serverTimestamp(),
+  });
+  return inv.sessionId;
+}
+
+/** Sends an invitation to co-edit a collaborative project — parallel to
+ *  sendInvitation, but for the lightweight project-level collaboration
+ *  model (see startCollabProject/joinCollabProject in projects.ts)
+ *  instead of a liveSessions-based classroom session. */
+export async function sendCollabProjectInvitation(opts: {
+  projectId: string;
+  projectTitle: string;
+  fromUserId: string;
+  fromUserName: string;
+  toUserId: string;
+}): Promise<string> {
+  const existing = await cGetDocs(
+    query(
+      collection(db(), "invitations"),
+      where("projectId", "==", opts.projectId),
+      where("toUserId", "==", opts.toUserId),
+      where("status", "==", "pending"),
+    ),
+  );
+  if (!existing.empty) return existing.docs[0].id;
+
+  const ref = await cAddDoc(collection(db(), "invitations"), {
+    type: "collab_project",
+    projectId: opts.projectId,
+    title: opts.projectTitle,
+    fromUserId: opts.fromUserId,
+    fromUserName: opts.fromUserName,
+    toUserId: opts.toUserId,
+    status: "pending" as InvitationStatus,
+    createdAt: serverTimestamp(),
+  });
+  return ref.id;
 }
 
 // ── Project sharing (Διαμοιρασμός σχεδίου) ──────────────────────────
