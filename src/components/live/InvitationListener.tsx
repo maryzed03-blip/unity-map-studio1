@@ -68,9 +68,9 @@ export function InvitationListener() {
                 try {
                   const sid = await respondToInvitation(inv.id, true, user.uid);
                   if (sid) navigate({ to: "/live/$sessionId", params: { sessionId: sid } });
-                  else navigate({ to: "/lobby", search: { tab: "live" } });
+                  else navigate({ to: "/lobby" });
                 } catch {
-                  navigate({ to: "/lobby", search: { tab: "live" } });
+                  navigate({ to: "/lobby" });
                 }
               },
             },

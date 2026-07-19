@@ -1,26 +1,22 @@
 // LiveClassButton — the single entry point for the live classroom.
 //
-// Replaces the old "Ζωντανά μαθήματα" browsable list entirely. Sits next
-// to the "Νέο σχέδιο" button on the projects tab.
-//
-// Gating rule (real-time, not polling): a student can only enter once the
-// teacher's presence record shows they are actually inside this exact
-// session (presence[teacherId].currentSessionId === session.id via the
-// Firebase Realtime Database — see src/lib/presence.ts). Session.status
-// alone is not enough, because a teacher can create a session and then
-// step away before actually walking into the room.
-import { useEffect, useMemo, useState } from "react";
+// LIVE detection is now driven entirely by live-broadcast.ts's single
+// RTDB signal (see that file for why): the button is never ambiguous
+// about "is a class live right now" because there's exactly one thing to
+// check, and it's cleared automatically (onDisconnect) if the teacher's
+// browser just disappears.
+import { useEffect, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useAuth } from "@/lib/auth-context";
-import { subscribePresence, type PresenceMap } from "@/lib/presence";
+import { subscribeLiveBroadcast, type LiveBroadcast } from "@/lib/live-broadcast";
 import {
   createLiveSession,
   joinLiveSessionDirect,
   notifyOnlineUsers,
-  subscribeActiveSession,
   subscribeTeacherSession,
   type LiveSession,
 } from "@/lib/live-sessions";
+import { subscribePresence, type PresenceMap } from "@/lib/presence";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -40,16 +36,15 @@ function usePresenceMap(): PresenceMap {
   return map;
 }
 
-function useActiveSession(): LiveSession | null | undefined {
-  const [session, setSession] = useState<LiveSession | null | undefined>(undefined);
-  useEffect(() => subscribeActiveSession(setSession), []);
-  return session;
+export function useLiveBroadcast(): LiveBroadcast | null {
+  const [broadcast, setBroadcast] = useState<LiveBroadcast | null>(null);
+  useEffect(() => subscribeLiveBroadcast(setBroadcast), []);
+  return broadcast;
 }
 
 /** The signed-in teacher's own session (active OR paused). Distinct from
- *  useActiveSession, which only sees status === "active" and would miss a
- *  paused session entirely — leaving a refreshed teacher with no way back
- *  in except accidentally starting a duplicate. */
+ *  the broadcast: this is about which Firestore session doc to resume,
+ *  not about the real-time "is it live" flag. */
 function useMyTeacherSession(uid: string | undefined): LiveSession | null | undefined {
   const [session, setSession] = useState<LiveSession | null | undefined>(undefined);
   useEffect(() => {
@@ -62,30 +57,14 @@ function useMyTeacherSession(uid: string | undefined): LiveSession | null | unde
 export function LiveClassButton() {
   const { user, profile } = useAuth();
   const isTeacher = profile?.role === "teacher" || profile?.role === "therapist";
-  const session = useActiveSession();
-  const presence = usePresenceMap();
-  const navigate = useNavigate();
-
-  const teacherInRoom = useMemo(() => {
-    if (!session) return false;
-    const p = presence[session.teacherId];
-    return !!p && p.state === "online" && p.currentSessionId === session.id;
-  }, [session, presence]);
+  const broadcast = useLiveBroadcast();
 
   if (!user || !profile) return null;
-  return isTeacher ? (
-    <TeacherButton session={session} />
-  ) : (
-    <StudentButton session={session} teacherInRoom={teacherInRoom} />
-  );
+  return isTeacher ? <TeacherButton broadcast={broadcast} /> : <StudentButton broadcast={broadcast} />;
 }
 
 // ── Teacher variant ────────────────────────────────────────────────
-function TeacherButton({
-  session,
-}: {
-  session: LiveSession | null | undefined;
-}) {
+function TeacherButton({ broadcast }: { broadcast: LiveBroadcast | null }) {
   const { user, profile } = useAuth();
   const navigate = useNavigate();
   const presence = usePresenceMap();
@@ -94,11 +73,7 @@ function TeacherButton({
   const [busy, setBusy] = useState(false);
 
   const myActiveSession = useMyTeacherSession(user?.uid);
-  const teacherInRoom = useMemo(() => {
-    if (!myActiveSession || !user) return false;
-    const p = presence[user.uid];
-    return myActiveSession.status === "active" && !!p && p.state === "online" && p.currentSessionId === myActiveSession.id;
-  }, [myActiveSession, presence, user]);
+  const isLive = !!broadcast && broadcast.sessionId === myActiveSession?.id;
 
   const start = async () => {
     if (!user || !profile || !title.trim()) return;
@@ -138,7 +113,7 @@ function TeacherButton({
       >
         <Radio className="h-4 w-4" />
         Ζωντανό Μάθημα
-        {teacherInRoom && (
+        {isLive && (
           <span className="ml-1 inline-flex items-center gap-1 rounded-full bg-white/20 px-2 py-0.5 text-[10px] font-bold tracking-wide">
             <span className="h-1.5 w-1.5 rounded-full bg-red-500 animate-pulse" />
             LIVE
@@ -153,8 +128,8 @@ function TeacherButton({
     );
   }
 
-  // Someone else's session is active — don't let a second one start.
-  const blockedByOther = !!session;
+  // Someone else is broadcasting — don't let a second session start.
+  const blockedByOther = !!broadcast;
 
   return (
     <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) setTitle(""); }}>
@@ -172,7 +147,7 @@ function TeacherButton({
         <DialogHeader>
           <DialogTitle>Έναρξη Ζωντανού Μαθήματος</DialogTitle>
           <DialogDescription>
-            Μόλις μπείτε μέσα, οι μαθητές θα δουν την ένδειξη LIVE και θα μπορούν να συνδεθούν.
+            Μόλις μπείτε μέσα, οι μαθητές θα δουν την ένδειξη LIVE και θα ειδοποιηθούν αμέσως.
           </DialogDescription>
         </DialogHeader>
         <Input
@@ -194,27 +169,20 @@ function TeacherButton({
 }
 
 // ── Student variant ────────────────────────────────────────────────
-function StudentButton({
-  session,
-  teacherInRoom,
-}: {
-  session: LiveSession | null | undefined;
-  teacherInRoom: boolean;
-}) {
+function StudentButton({ broadcast }: { broadcast: LiveBroadcast | null }) {
   const { user } = useAuth();
   const navigate = useNavigate();
   const [joining, setJoining] = useState(false);
 
-  const enabled = !!session && teacherInRoom;
+  const enabled = !!broadcast;
 
   const enter = async () => {
-    if (!user || !session || !enabled) return;
+    if (!user || !broadcast || !enabled) return;
     setJoining(true);
     try {
-      if (!session.participantIds.includes(user.uid)) {
-        await joinLiveSessionDirect(session.id, user.uid);
-      }
-      navigate({ to: "/live/$sessionId", params: { sessionId: session.id } });
+      // Idempotent — safe even if already a participant.
+      await joinLiveSessionDirect(broadcast.sessionId, user.uid);
+      navigate({ to: "/live/$sessionId", params: { sessionId: broadcast.sessionId } });
     } catch {
       toast.error("Δεν ήταν δυνατή η είσοδος στο μάθημα");
     } finally {
@@ -222,11 +190,7 @@ function StudentButton({
     }
   };
 
-  const helper = !session
-    ? "Δεν υπάρχει ζωντανό μάθημα αυτή τη στιγμή"
-    : !teacherInRoom
-      ? "Ο καθηγητής δεν έχει μπει ακόμη"
-      : undefined;
+  const helper = broadcast ? undefined : "Δεν υπάρχει ζωντανό μάθημα αυτή τη στιγμή";
 
   return (
     <div className="flex flex-col items-start gap-1">
