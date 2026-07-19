@@ -453,6 +453,7 @@ export async function sendInvitation(opts: {
   const existing = await cGetDocs(
     query(
       collection(db(), "invitations"),
+      where("fromUserId", "==", opts.fromUserId),
       where("sessionId", "==", opts.sessionId),
       where("toUserId", "==", opts.toUserId),
       where("status", "==", "pending"),
@@ -519,6 +520,7 @@ export async function sendCollabProjectInvitation(opts: {
   const existing = await cGetDocs(
     query(
       collection(db(), "invitations"),
+      where("fromUserId", "==", opts.fromUserId),
       where("projectId", "==", opts.projectId),
       where("toUserId", "==", opts.toUserId),
       where("status", "==", "pending"),
