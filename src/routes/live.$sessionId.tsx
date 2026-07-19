@@ -172,11 +172,21 @@ function LiveRoom() {
   const [manualSaving, setManualSaving] = useState(false);
   const [leaveChoiceOpen, setLeaveChoiceOpen] = useState(false);
   const [selectedObjects, setSelectedObjects] = useState<CanvasObject[]>([]);
+  const [selectionViaMarquee, setSelectionViaMarquee] = useState(false);
   const [leaveBusy, setLeaveBusy] = useState<"pause" | "end" | null>(null);
   const saveApiRef = useRef<{ save: () => Promise<void> } | null>(null);
 
   // Tab system — each tab has its own mapId
   const [tabs, setTabs] = useState<CanvasTab[]>([]);
+  // Guards the one-time initial tab setup below — using a ref instead of
+  // checking tabs.length inside the subscribeSession callback, because
+  // that callback's closure is only created once (effect deps: only
+  // [sessionId]) and would otherwise always see tabs as it was at MOUNT
+  // time (empty), re-running the "first load" setup — and wiping out
+  // every other open tab (e.g. a student's group tab) — on every single
+  // session document update afterwards (pause, resume, a transfer
+  // toggling presentingBoardId, editPermissions changing, etc).
+  const tabsInitializedRef = useRef(false);
   const [activeTabId, setActiveTabId] = useState<string>("");
 
   useEffect(() => subscribeGroupRooms(sessionId, setGroups), [sessionId]);
@@ -224,8 +234,11 @@ function LiveRoom() {
             sessionId,
           });
         });
-        // Init local tab state
-        if (tabs.length === 0) {
+        // Init local tab state — exactly once, ever, per mount (see the
+        // tabsInitializedRef comment above for why this can't just check
+        // tabs.length here).
+        if (!tabsInitializedRef.current) {
+          tabsInitializedRef.current = true;
           setTabs([{ id: "main", mapId: s.mainBoardId, label: "Ζωντανό Μάθημα", kind: "live", closeable: false }]);
           setActiveTabId("main");
         }
@@ -390,8 +403,10 @@ function LiveRoom() {
   const studentIsShowingOwnGroup = studentOnGroupTab;
   const studentIsShowingMain = !studentOnGroupTab;
   // True while THIS student is looking at the "main" tab and the teacher
-  // has transferred the live lesson into a group — the board they're
-  // seeing is that group's, mirrored read-only.
+  // has transferred the live lesson into a group — same board, same
+  // permission rules as the normal main board (teacher always edits,
+  // students only with explicit permission). Purely informational now,
+  // used for the banner text, not for locking anything.
   const isViewingMirroredMain = activeTab?.id === "main" && !!session.presentingBoardId;
 
   // For the TEACHER, tabs still apply (main + any group boards they've
@@ -401,18 +416,15 @@ function LiveRoom() {
     : undefined;
 
   const isLiveOwner = isTeacher
-    ? !isViewingMirroredMain // even the teacher can't edit the frozen mirror
-    : isViewingMirroredMain
-      ? false
-      : studentIsShowingOwnGroup
-        ? true // any group member can co-edit with their groupmates
-        : studentHasEditOnMain; // showing the central board — needs explicit permission
+    ? true
+    : studentIsShowingOwnGroup
+      ? true // any group member can co-edit with their groupmates
+      : studentHasEditOnMain; // showing the central board (mirrored or not) — needs explicit permission
 
   const isReadOnly =
     session.status === "ended" ||
     session.status === "paused" ||
     session.status === "ending" ||
-    isViewingMirroredMain ||
     (!isTeacher && !isLiveOwner);
 
   // ── Selection actions bar (send to another board / new project) ────
@@ -680,7 +692,7 @@ function LiveRoom() {
             <div className="shrink-0 border-b border-border bg-primary/10 px-4 py-1.5 flex items-center gap-2">
               <MonitorPlay className="h-3.5 w-3.5 text-primary shrink-0" />
               <span className="text-xs text-primary font-medium">
-                Το ζωντανό μάθημα μεταφέρθηκε προσωρινά στην ομάδα — προβολή μόνο
+                Το ζωντανό μάθημα μεταφέρθηκε προσωρινά στην ομάδα
               </span>
             </div>
           )}
@@ -719,7 +731,6 @@ function LiveRoom() {
               // just whoever's currently looking. Every other tab is
               // completely unaffected.
               const mapId = tab.id === "main" ? (session.presentingBoardId || session.mainBoardId) : tab.mapId;
-              const isMirroredMain = tab.id === "main" && !!session.presentingBoardId;
               return (
                 // Keep ALL tabs mounted — visibility:hidden preserves state without display:none unmount
                 <div
@@ -737,7 +748,7 @@ function LiveRoom() {
                     setTool={setTool}
                     isActive={isActive}
                     onReady={isActive ? (api) => { saveApiRef.current = api; } : undefined}
-                    onSelectionChange={isActive ? setSelectedObjects : undefined}
+                    onSelectionChange={isActive ? (objs, viaMarquee) => { setSelectedObjects(objs); setSelectionViaMarquee(viaMarquee); } : undefined}
                     onSaveStatusChange={
                       !isTeacher && tab.kind === "collab" && myGroup && tab.mapId === myGroup.boardId
                         ? (status) => {
@@ -750,18 +761,14 @@ function LiveRoom() {
                     }
                     liveSync={session.status === "active"}
                     liveOwner={
-                      isMirroredMain
-                        ? false // frozen mirror — nobody edits through the main tab while transferred
-                        : isTeacher
+                      isTeacher
                         ? isLiveOwner
                         : tab.kind === "collab" && tab.mapId === myGroup?.boardId
                           ? true // any group member can co-edit with their groupmates
                           : studentHasEditOnMain
                     }
                     readOnly={
-                      isMirroredMain
-                        ? true
-                        : isTeacher
+                      isTeacher
                         ? isReadOnly
                         : session.status === "ended" ||
                           session.status === "paused" ||
@@ -772,7 +779,7 @@ function LiveRoom() {
                 </div>
               );
             })}
-          {!isReadOnly && (
+          {!isReadOnly && selectionViaMarquee && (
             <SelectionActionsBar
               selectedObjects={selectedObjects}
               onCreateNewProject={handleCreateNewProjectFromSelection}
