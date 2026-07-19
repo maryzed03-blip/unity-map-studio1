@@ -5,6 +5,12 @@
       "$uid": {
         ".write": "auth != null && auth.uid == $uid"
       }
+    },
+    "liveClass": {
+      "current": {
+        ".read": true,
+        ".write": "auth != null && (!data.exists() || auth.uid == data.child('teacherId').val()) && (!newData.exists() || auth.uid == newData.child('teacherId').val())"
+      }
     }
   }
 }

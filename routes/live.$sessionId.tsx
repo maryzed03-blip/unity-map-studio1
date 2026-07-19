@@ -14,6 +14,7 @@ import {
   type LiveSession,
 } from "@/lib/live-sessions";
 import { setCurrentSession } from "@/lib/presence";
+import { startBroadcast, stopBroadcast } from "@/lib/live-broadcast";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -188,6 +189,24 @@ function LiveRoom() {
     try { setCurrentSession(sessionId); } catch { /**/ }
     return () => { try { setCurrentSession(null); } catch { /**/ } };
   }, [sessionId]);
+
+  // The single, unambiguous "is this class live right now" signal (see
+  // live-broadcast.ts). Broadcasts exactly while the teacher's own
+  // browser has this session open AND its status is "active" — cleared
+  // automatically by this effect's own cleanup the moment either stops
+  // being true (paused, ended, navigated away), and by RTDB's
+  // onDisconnect if the browser just closes/crashes.
+  useEffect(() => {
+    if (!session || !user || user.uid !== session.teacherId) return;
+    if (session.status !== "active") return;
+    startBroadcast({
+      sessionId: session.id,
+      teacherId: user.uid,
+      teacherName: session.teacherName,
+      title: session.title,
+    });
+    return () => stopBroadcast();
+  }, [session?.id, session?.status, user?.uid, session?.teacherId, session?.teacherName, session?.title]);
 
   useEffect(() => {
     return subscribeSession(sessionId, (s) => {
@@ -426,6 +445,7 @@ function LiveRoom() {
     setLeaveBusy("pause");
     try {
       await pauseSession(session.id);
+      stopBroadcast();
       await notifySessionPaused(session, session.teacherName).catch(() => {});
       navigate({ to: "/lobby" });
     } catch {
@@ -448,6 +468,7 @@ function LiveRoom() {
         return;
       }
       toast.success(distributed > 0 ? `Το μάθημα έληξε οριστικά. ${distributed} σχέδια μοιράστηκαν στους μαθητές.` : "Το μάθημα έληξε οριστικά.");
+      stopBroadcast();
       navigate({ to: "/lobby" });
     } catch {
       toast.error("Αποτυχία αποθήκευσης. Το μάθημα ΔΕΝ έκλεισε.");

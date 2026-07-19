@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/lib/auth-context";
 import { subscribePresence, type PresenceMap } from "@/lib/presence";
+import { stopBroadcast } from "@/lib/live-broadcast";
 import { Link, useNavigate } from "@tanstack/react-router";
 import {
   type LiveSession,
@@ -577,6 +578,7 @@ export function TeacherSessionPanel({
     setPausing(true);
     try {
       await pauseSession(session.id);
+      stopBroadcast();
       await notifySessionPaused(session, session.teacherName).catch(() => {});
       toast.success("Το μάθημα μπήκε σε παύση — μπορείτε να συνεχίσετε αργότερα από το ίδιο κουμπί.");
       setEndChoiceOpen(false);
@@ -599,6 +601,7 @@ export function TeacherSessionPanel({
         return;
       }
       toast.success(distributed > 0 ? `Το μάθημα έληξε οριστικά. ${distributed} σχέδια μοιράστηκαν στους μαθητές.` : "Το μάθημα έληξε οριστικά.");
+      stopBroadcast();
       setEndChoiceOpen(false);
     } catch (e) {
       toast.error("Αποτυχία αποθήκευσης. Το μάθημα ΔΕΝ έκλεισε.");
