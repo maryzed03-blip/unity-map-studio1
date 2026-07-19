@@ -55,10 +55,15 @@ interface Props {
   /** When false, debounced save and live sync poll are suppressed (background tab). */
   isActive?: boolean;
   /** Fires whenever the current selection changes, with the actual selected
-   *  objects (not just ids) — lets the parent page show a floating action
-   *  bar ("send to live lesson" / "new project from selection") without
-   *  CanvasStage needing to know anything about those destinations. */
-  onSelectionChange?: (objects: CanvasObject[]) => void;
+   *  objects (not just ids — and including any connector whose BOTH
+   *  endpoints are in the selection, even though marquee-select itself
+   *  deliberately skips connectors since they visually follow their
+   *  shapes) — plus whether this selection was made with the marquee
+   *  (rubber-band) tool specifically, vs. a plain click. Lets the parent
+   *  page show a floating action bar only for deliberate marquee
+   *  selections, per the product decision, without CanvasStage needing to
+   *  know anything about those destinations. */
+  onSelectionChange?: (objects: CanvasObject[], viaMarquee: boolean) => void;
 }
 
 const newId = () => Math.random().toString(36).slice(2, 10);
@@ -517,11 +522,32 @@ export function CanvasStage({
   const [editingId, setEditingId] = useState<string | null>(null);
   // Shape hovered with select tool — shows magnet hints
   const [hoverShapeId, setHoverShapeId] = useState<string | null>(null);
+  // Set true right before setSelectedIds() in the marquee-completion
+  // handler only — read (and reset) the moment selectedIds itself next
+  // changes, so it reflects "was THIS selection made via marquee" without
+  // flipping back to false on unrelated re-renders (e.g. a live-sync tick
+  // touching state.objects while the same marquee selection is still active).
+  const marqueeSelectRef = useRef(false);
+  const [selectionViaMarquee, setSelectionViaMarquee] = useState(false);
+  useEffect(() => {
+    setSelectionViaMarquee(marqueeSelectRef.current);
+    marqueeSelectRef.current = false;
+  }, [selectedIds]);
   useEffect(() => {
     if (!onSelectionChange) return;
     const selectedSet = new Set(selectedIds);
-    onSelectionChange(state.objects.filter((o) => selectedSet.has(o.id)));
-  }, [selectedIds, state.objects, onSelectionChange]);
+    const selected = state.objects.filter((o) => selectedSet.has(o.id));
+    // Auto-include any connector whose both endpoints are in the
+    // selection — marquee deliberately excludes connectors themselves
+    // (see the marquee hit-test below), so without this, sending a
+    // selection elsewhere would silently drop the relationships between
+    // the shapes.
+    const idSet = new Set(selected.map((o) => o.id));
+    const relatedConnectors = state.objects.filter(
+      (o) => !idSet.has(o.id) && o.type === "connector" && idSet.has(o.sourceObjectId) && idSet.has(o.targetObjectId),
+    );
+    onSelectionChange([...selected, ...relatedConnectors], selectionViaMarquee);
+  }, [selectedIds, state.objects, onSelectionChange, selectionViaMarquee]);
   useEffect(() => {
     // Exit edit mode if the editing object is no longer the (only) selection.
     if (editingId && (selectedIds.length !== 1 || selectedIds[0] !== editingId)) {
@@ -1509,6 +1535,7 @@ export function CanvasStage({
         })
         .map((o) => o.id);
       setSelectedIds(hits);
+      marqueeSelectRef.current = true;
       setMarquee(null);
       setTool("select");
       return;
