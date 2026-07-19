@@ -12,6 +12,7 @@ import {
   query,
   where,
   serverTimestamp,
+  arrayUnion,
   type Unsubscribe,
 } from "firebase/firestore";
 import { db } from "./firebase";
@@ -50,6 +51,10 @@ export interface Project {
   thumbnail?: string;
   createdAt?: unknown;
   updatedAt?: unknown;
+  /** Anyone in this list can co-edit the project live, exactly like a
+   *  group's members — set for projectType "collaborative" only. See
+   *  startCollabProject / joinCollabProject / subscribeCollabParticipants. */
+  collabParticipantIds?: string[];
   /** Human-readable origin, e.g. "Χώρος Εργασίας — Χώρος 3" or a group's name.
    *  Shown under the project title in the library so people can tell where
    *  an auto-saved draft came from. Absent for normal, manually-created projects. */
@@ -142,6 +147,46 @@ export async function createProjectFromObjects(
     acceptedAt: serverTimestamp(),
   });
   return ref.id;
+}
+
+// ── Collaborative projects — lightweight, unlimited concurrent ─────────
+// Deliberately independent of liveSessions.ts entirely: a "Συνεργατικό"
+// project is just a regular project with a list of co-editors who can
+// all live-sync it, exactly like group boards inside a live session.
+// No "one active session per owner" restriction — any number of
+// different people can each have their own simultaneous collaborative
+// project running at once, since nothing here is scoped by teacherId or
+// a single shared "active session" document.
+
+/** Marks a freshly-created project as collaborative and seeds its
+ *  participant list with just the owner. Call once, right after
+ *  createProject(...). */
+export async function startCollabProject(projectId: string, ownerId: string): Promise<void> {
+  await cUpdateDoc(doc(db(), "projects", projectId), {
+    collabParticipantIds: [ownerId],
+    updatedAt: serverTimestamp(),
+  });
+}
+
+/** Self-join — called by an invited user's own browser after accepting
+ *  a collab_project invitation (see InvitationListener.tsx). */
+export async function joinCollabProject(projectId: string, uid: string): Promise<void> {
+  await cUpdateDoc(doc(db(), "projects", projectId), {
+    collabParticipantIds: arrayUnion(uid),
+    updatedAt: serverTimestamp(),
+  });
+}
+
+/** Real-time participant list — lets the editor page react instantly
+ *  when someone new joins, without needing a page refresh. */
+export function subscribeCollabParticipants(
+  projectId: string,
+  cb: (uids: string[]) => void,
+): Unsubscribe {
+  return cOnSnapshot(doc(db(), "projects", projectId), (snap) => {
+    const data = (snap as { data: () => { collabParticipantIds?: string[] } | undefined }).data();
+    cb(data?.collabParticipantIds ?? []);
+  });
 }
 
 export function subscribeMyProjects(
