@@ -72,6 +72,7 @@ import {
   usePresence,
 } from "@/components/live/LivePanels";
 import { LiveClassButton } from "@/components/live/LiveClassButton";
+import { CollabLiveButton } from "@/components/live/CollabLiveButton";
 import { toast } from "sonner";
 import { formatDistanceToNow } from "date-fns";
 import { el } from "date-fns/locale";
@@ -160,6 +161,7 @@ function tabMeta(
             <NewFolderButton />
             <NewProjectButton />
             <LiveClassButton />
+            <CollabLiveButton />
           </div>
         ),
       };
