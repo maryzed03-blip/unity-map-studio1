@@ -769,9 +769,9 @@ export async function endSessionAndSave(
     for (const member of contributors) {
       const copyId = `livecopy_${sessionId}_${room.id}_${member.userId}`;
       try {
-        const existing = await cGetDoc(doc(db(), "projects", copyId));
-        if (!existing.exists()) {
-          await cSetDoc(doc(db(), "projects", copyId), {
+        await cSetDoc(
+          doc(db(), "projects", copyId),
+          {
             ownerId: member.userId,
             title,
             status: "draft",
@@ -793,8 +793,9 @@ export async function endSessionAndSave(
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
             copiedAt: serverTimestamp(),
-          });
-        }
+          },
+          { merge: true },
+        );
         if (state) {
           const sanitized = JSON.parse(JSON.stringify(state));
           await cSetDoc(
