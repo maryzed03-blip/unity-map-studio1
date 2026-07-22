@@ -183,7 +183,8 @@ function StudentButton({ broadcast }: { broadcast: LiveBroadcast | null }) {
       // Idempotent — safe even if already a participant.
       await joinLiveSessionDirect(broadcast.sessionId, user.uid);
       navigate({ to: "/live/$sessionId", params: { sessionId: broadcast.sessionId } });
-    } catch {
+    } catch (e) {
+      console.error("Είσοδος στο ζωντανό μάθημα απέτυχε:", e);
       toast.error("Δεν ήταν δυνατή η είσοδος στο μάθημα");
     } finally {
       setJoining(false);
