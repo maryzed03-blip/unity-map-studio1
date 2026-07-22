@@ -217,9 +217,9 @@ export async function finalizeCollabProjectIfEmpty(projectId: string): Promise<v
   for (const uid of participants) {
     const copyId = `collabcopy_${projectId}_${uid}`;
     try {
-      const existing = await cGetDoc(doc(db(), "projects", copyId));
-      if (!existing.exists()) {
-        await cSetDoc(doc(db(), "projects", copyId), {
+      await cSetDoc(
+        doc(db(), "projects", copyId),
+        {
           ownerId: uid,
           title,
           status: "draft",
@@ -233,8 +233,9 @@ export async function finalizeCollabProjectIfEmpty(projectId: string): Promise<v
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
           copiedAt: serverTimestamp(),
-        });
-      }
+        },
+        { merge: true },
+      );
       if (state) {
         const sanitized = JSON.parse(JSON.stringify(state));
         await cSetDoc(
