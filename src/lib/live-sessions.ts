@@ -775,7 +775,7 @@ export async function endSessionAndSave(
             ownerId: member.userId,
             title,
             status: "draft",
-            projectType: "collaborative",
+            projectType: "personal",
             mode: "solo",
             workspaceType: sessionData?.workspaceType ?? "free-drawing",
             sourceMapId: null,
