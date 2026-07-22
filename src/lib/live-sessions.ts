@@ -740,6 +740,57 @@ export async function endSessionAndSave(
   const failed: EndSessionFailure[] = [];
   let distributed = 0;
 
+  // Main/central board — archived ONLY to the teacher's own lobby, as
+  // their personal copy of the whole lesson. Group boards (below) go
+  // only to the students who actually worked in each one — never to the
+  // teacher, never cross-pollinated between groups.
+  if (sessionData?.mainBoardId) {
+    const mainState = await mapStore.load(sessionData.mainBoardId);
+    if (mainState && mainState.objects.length > 0) {
+      const r = await forceSaveBoard(sessionData.mainBoardId, mainState, 3);
+      if (!r.ok) {
+        failed.push({ groupId: "main", groupName: "Κεντρικό μάθημα", studentId: teacherId, studentName: teacherName });
+      } else {
+        const mainCopyId = `livecopy_${sessionId}_main_${teacherId}`;
+        try {
+          await cSetDoc(
+            doc(db(), "projects", mainCopyId),
+            {
+              ownerId: teacherId,
+              title: `Ζωντανό μάθημα – ${lessonTitle} – ${dateLabel}`,
+              status: "draft",
+              projectType: "personal",
+              mode: "solo",
+              workspaceType: sessionData?.workspaceType ?? "free-drawing",
+              sourceMapId: null,
+              liveSessionId: null,
+              originLabel: "🎓 Κεντρικό σχέδιο ζωντανού μαθήματος",
+              sourceType: "live-main-final",
+              sourceSessionId: sessionId,
+              lessonTitle,
+              lessonDate: serverTimestamp(),
+              teacherId,
+              teacherName,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+              copiedAt: serverTimestamp(),
+            },
+            { merge: true },
+          );
+          const sanitizedMain = JSON.parse(JSON.stringify(mainState));
+          await cSetDoc(
+            doc(db(), "projects", mainCopyId, "snapshots", "current"),
+            { payload: sanitizedMain, schemaVersion: 1, isCurrent: true, savedAt: serverTimestamp() },
+            { merge: true },
+          );
+        } catch (e) {
+          console.error("Failed to archive main board for teacher", e);
+          failed.push({ groupId: "main", groupName: "Κεντρικό μάθημα", studentId: teacherId, studentName: teacherName });
+        }
+      }
+    }
+  }
+
   for (const room of rooms) {
     const membersSnap = await cGetDocs(
       collection(db(), "liveSessions", sessionId, "groupRooms", room.id, "members"),
