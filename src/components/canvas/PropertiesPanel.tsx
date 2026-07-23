@@ -18,12 +18,18 @@ import {
   AlignVerticalDistributeCenter,
   Group,
   Ungroup,
+  Square,
+  Circle,
+  Triangle,
+  Diamond,
+  Hexagon,
+  Replace,
   Lock,
   Unlock,
   Paintbrush,
   ClipboardPaste,
 } from "lucide-react";
-import type { CanvasObject } from "@/lib/canvas/types";
+import type { CanvasObject, ShapeKind } from "@/lib/canvas/types";
 import { VoiceField } from "./VoiceField";
 
 export type AlignMode = "left" | "right" | "center-h" | "top" | "bottom" | "center-v";
@@ -59,6 +65,17 @@ const SWATCHES = [
   "#F59E0B",
   "#EF4444",
   "#8B5CF6",
+];
+
+const SHAPE_KIND_OPTIONS: Array<{ kind: ShapeKind; label: string; Icon: typeof Square }> = [
+  { kind: "rectangle", label: "Ορθογώνιο", Icon: Square },
+  { kind: "rounded-rectangle", label: "Στρογγυλεμένο ορθογώνιο", Icon: Square },
+  { kind: "square", label: "Τετράγωνο", Icon: Square },
+  { kind: "circle", label: "Κύκλος", Icon: Circle },
+  { kind: "oval", label: "Οβάλ", Icon: Circle },
+  { kind: "triangle", label: "Τρίγωνο", Icon: Triangle },
+  { kind: "diamond", label: "Ρόμβος", Icon: Diamond },
+  { kind: "polygon", label: "Πολύγωνο", Icon: Hexagon },
 ];
 
 export function PropertiesPanel({
@@ -152,6 +169,36 @@ export function PropertiesPanel({
             placeholder="Προαιρετικό"
             ariaLabel="Ετικέτα σχήματος"
           />
+        </div>
+      )}
+
+      {!multi && isShape && "shapeKind" in object && (
+        <div className="space-y-2 mb-3">
+          <Label className="text-xs flex items-center gap-1.5">
+            <Replace className="h-3 w-3" /> Αντικατάσταση σχήματος
+          </Label>
+          <p className="text-[10px] text-muted-foreground -mt-1">
+            Η μορφοποίηση (χρώμα, μέγεθος, κείμενο) διατηρείται.
+          </p>
+          <div className="grid grid-cols-4 gap-1.5">
+            {SHAPE_KIND_OPTIONS.map(({ kind, label, Icon }) => {
+              const active = (object as { shapeKind: ShapeKind }).shapeKind === kind;
+              return (
+                <button
+                  key={kind}
+                  title={label}
+                  onClick={() => !active && onChange({ shapeKind: kind } as Partial<CanvasObject>)}
+                  className={`flex items-center justify-center h-9 rounded-md border transition-colors ${
+                    active
+                      ? "border-primary bg-primary/10 text-primary"
+                      : "border-border hover:bg-muted text-muted-foreground"
+                  }`}
+                >
+                  <Icon className="h-4 w-4" />
+                </button>
+              );
+            })}
+          </div>
         </div>
       )}
 
