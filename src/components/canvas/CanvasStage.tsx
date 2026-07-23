@@ -1540,8 +1540,29 @@ export function CanvasStage({
       setTool("select");
       return;
     }
+    if (d.kind === "create-shape") {
+      const created = state.objects.find((o) => o.id === d.tempId);
+      // Anything under ~6px means the user just clicked without meaningfully
+      // dragging to size it — apply a sensible default instead of leaving
+      // a near-invisible sliver they'd have to hunt for to resize.
+      if (created && created.width <= 6 && created.height <= 6) {
+        const isSquareish = d.shape === "square" || d.shape === "circle";
+        const defaultW = isSquareish ? 100 : 120;
+        const defaultH = isSquareish ? 100 : 80;
+        setState((s) => ({
+          ...s,
+          objects: s.objects.map((o) =>
+            o.id === d.tempId
+              ? { ...o, x: d.startX - defaultW / 2, y: d.startY - defaultH / 2, width: defaultW, height: defaultH }
+              : o,
+          ),
+        }));
+      }
+      finalizeHistory();
+      setTool("select");
+      return;
+    }
     if (
-      d.kind === "create-shape" ||
       d.kind === "create-line" ||
       d.kind === "create-frame" ||
       d.kind === "draw"
