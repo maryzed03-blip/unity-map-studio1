@@ -64,9 +64,9 @@ import {
   Check,
   Mail,
 } from "lucide-react";
-import { subscribeMySessions, sendCollabProjectInvitation, subscribeReceivedDesigns, markDesignSaved, type ReceivedDesign } from "@/lib/live-sessions";
+import { sendCollabProjectInvitation, subscribeReceivedDesigns, markDesignSaved, type ReceivedDesign } from "@/lib/live-sessions";
 import { WorkspaceRoomsPanel } from "@/components/rooms/WorkspaceRoomsPanel";
-import { getProject, startCollabProject } from "@/lib/projects";
+import { startCollabProject, subscribeMyCollabProjects } from "@/lib/projects";
 import {
   OnlineUsersPanel,
   usePresence,
@@ -1351,150 +1351,68 @@ function SkeletonGrid() {
 // Status badge ("Ενεργή" vs "Ολοκληρωμένη") comes from project.mode.
 function CollabProjectsList() {
   const { user } = useAuth();
-  type Row = {
-    project: Project;
-    sessionTitle: string;
-    ownerName: string;
-    isOwner: boolean;
-    mode: "live" | "collaborativeFinal" | "solo" | undefined;
-    memberCount: number;
-  };
-  const [rows, setRows] = useState<Row[] | null>(null);
+  const [owned, setOwned] = useState<Project[] | null>(null);
+  const [joined, setJoined] = useState<Project[]>([]);
+  const [folders, setFolders] = useState<Folder[]>([]);
 
   useEffect(() => {
     if (!user) return;
-    let alive = true;
-    let cancelLoad: (() => void) | null = null;
-    const unsub = subscribeMySessions(user.uid, (sessions) => {
-      cancelLoad?.();
-      let cancelled = false;
-      cancelLoad = () => {
-        cancelled = true;
-      };
-      (async () => {
-        const out: Row[] = [];
-        for (const s of sessions) {
-          const isOwner = s.teacherId === user.uid;
-          const p = await getProject(s.mainBoardId).catch(() => null);
-          if (!p) continue;
-          out.push({
-            project: p,
-            sessionTitle: s.title,
-            ownerName: s.teacherName,
-            isOwner,
-            mode: (p.mode as Row["mode"]) ?? undefined,
-            memberCount: s.participantIds?.length ?? 1,
-          });
-        }
-        if (!cancelled && alive) {
-          out.sort((a, b) => {
-            const at =
-              (a.project.updatedAt as { toMillis?: () => number } | undefined)?.toMillis?.() ?? 0;
-            const bt =
-              (b.project.updatedAt as { toMillis?: () => number } | undefined)?.toMillis?.() ?? 0;
-            return bt - at;
-          });
-          setRows(out);
-        }
-      })();
-    });
+    // Owned collaborative projects — same source as "Τα Έργα μου", just
+    // filtered down to projectType "collaborative" here.
+    const u1 = subscribeMyProjects(user.uid, (p) =>
+      setOwned(p.filter((x) => x.projectType === "collaborative" && x.status !== "archived")),
+    );
+    // Collaborative projects I was INVITED to (not the owner) — the
+    // lightweight, unlimited-concurrent model (see projects.ts), nothing
+    // to do with liveSessions at all.
+    const u2 = subscribeMyCollabProjects(user.uid, (p) =>
+      setJoined(p.filter((x) => x.ownerId !== user.uid)),
+    );
+    const u3 = subscribeMyFolders(user.uid, setFolders);
     return () => {
-      alive = false;
-      cancelLoad?.();
-      unsub();
+      u1();
+      u2();
+      u3();
     };
   }, [user]);
 
-  if (rows === null) return <SkeletonGrid />;
-  if (rows.length === 0) {
+  if (owned === null) return <SkeletonGrid />;
+  if (owned.length === 0 && joined.length === 0) {
     return (
       <EmptyState
         icon={<Users className="h-6 w-6" />}
         title="Δεν έχετε συνεργατικά έργα"
-        description="Όταν σας προσκαλέσει ένας εκπαιδευτικός σε ζωντανή συνεδρία ή σε ομαδικό πίνακα, θα εμφανιστούν εδώ."
+        description="Δημιουργήστε ένα από 'Νέο σχέδιο → Συνεργατικό', ή θα εμφανιστεί εδώ μόλις κάποιος σας προσκαλέσει."
       />
     );
   }
 
-  const owned = rows.filter((r) => r.isOwner);
-  const joined = rows.filter((r) => !r.isOwner);
   return (
     <div className="space-y-8">
-      {owned.length > 0 && <CollabSection title="Έργα που μοιράζομαι" rows={owned} />}
-      {joined.length > 0 && <CollabSection title="Έργα στα οποία συμμετέχω" rows={joined} />}
+      {owned.length > 0 && (
+        <section className="space-y-3">
+          <h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wider">
+            Έργα που μοιράζομαι
+          </h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
+            {owned.map((p) => (
+              <ProjectCard key={p.id} project={p} folders={folders} />
+            ))}
+          </div>
+        </section>
+      )}
+      {joined.length > 0 && (
+        <section className="space-y-3">
+          <h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wider">
+            Έργα στα οποία συμμετέχω
+          </h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
+            {joined.map((p) => (
+              <ProjectCard key={p.id} project={p} folders={folders} />
+            ))}
+          </div>
+        </section>
+      )}
     </div>
   );
-}
-
-function CollabSection({
-  title,
-  rows,
-}: {
-  title: string;
-  rows: Array<{
-    project: Project;
-    sessionTitle: string;
-    ownerName: string;
-    isOwner: boolean;
-    mode: "live" | "collaborativeFinal" | "solo" | undefined;
-    memberCount: number;
-  }>;
-}) {
-  return (
-    <section className="space-y-3">
-      <h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wider">
-        {title}
-      </h2>
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
-        {rows.map((r) => (
-          <Link
-            key={r.project.id}
-            to="/project/$projectId"
-            params={{ projectId: r.project.id }}
-            className="block"
-          >
-            <Card className="panel-soft p-0 overflow-hidden hover:shadow-[var(--shadow-lift)] transition-shadow">
-              <div className="aspect-[4/3] canvas-dotgrid border-b border-border flex items-center justify-center">
-                <Users className="h-8 w-8 text-muted-foreground/40" />
-              </div>
-              <div className="p-4 space-y-2">
-                <div className="flex items-start justify-between gap-2">
-                  <h3 className="text-sm font-medium truncate">{r.project.title}</h3>
-                  <CollabModeBadge mode={r.mode} />
-                </div>
-                <div className="text-xs text-muted-foreground space-y-0.5">
-                  <div className="truncate">Από: {r.ownerName}</div>
-                  <div className="flex items-center justify-between">
-                    <span>{r.memberCount} συμμετέχοντες</span>
-                    <span>
-                      {(() => {
-                        const ts = (
-                          r.project.updatedAt as { toDate?: () => Date } | undefined
-                        )?.toDate?.();
-                        return ts ? formatDistanceToNow(ts, { addSuffix: true, locale: el }) : "—";
-                      })()}
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </Card>
-          </Link>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function CollabModeBadge({ mode }: { mode: "live" | "collaborativeFinal" | "solo" | undefined }) {
-  if (mode === "live") {
-    return <span className="pill bg-primary/10 text-primary">Ενεργή</span>;
-  }
-  if (mode === "collaborativeFinal") {
-    return (
-      <span className="pill bg-[color:var(--success)]/15 text-[color:var(--success)]">
-        Ολοκληρωμένη
-      </span>
-    );
-  }
-  return <span className="pill bg-muted text-muted-foreground">—</span>;
 }
