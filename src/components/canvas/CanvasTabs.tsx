@@ -41,7 +41,7 @@ export function CanvasTabs({
   showNew = true,
 }: Props) {
   return (
-    <div className="flex items-center h-9 border-b border-border bg-surface shrink-0 overflow-x-auto">
+    <div className="flex items-center h-9 border-b border-border bg-surface shrink-0 overflow-x-auto overflow-y-hidden">
       {tabs.map((tab) => {
         const active = tab.id === activeId;
         return (
