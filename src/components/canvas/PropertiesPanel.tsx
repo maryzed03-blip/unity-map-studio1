@@ -468,8 +468,8 @@ export function PropertiesPanel({
                       className="text-xs gap-1.5"
                       onClick={() =>
                         isConnector
-                          ? onChange({ routeType: "curved", curved: true, bendPoints: [] } as unknown as Partial<CanvasObject>)
-                          : onChange({ lineKind: "curved", bendPoints: [] } as unknown as Partial<CanvasObject>)
+                          ? onChange({ routeType: "curved", curved: true } as Partial<CanvasObject>)
+                          : onChange({ lineKind: "curved" } as Partial<CanvasObject>)
                       }
                     >
                       <Replace className="h-3.5 w-3.5" />
