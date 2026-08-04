@@ -194,7 +194,7 @@ export interface ConnectorObject extends BaseObject {
   label?: string;
   /** Text color for the label — independent of the connector's own stroke color. */
   labelColor?: string;
-  labelStyle?: { italic?: boolean; bold?: boolean; underline?: boolean };
+  labelStyle?: { italic?: boolean; bold?: boolean; underline?: boolean; fontSize?: number; textTransform?: "none" | "uppercase" | "capitalize" };
   relationshipValue?: RelationshipValue;
   /** Stage 6: optional bend points between source and target. */
   bendPoints?: BendPoints;
