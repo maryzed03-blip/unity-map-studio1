@@ -29,7 +29,7 @@ import {
   Paintbrush,
   ClipboardPaste,
 } from "lucide-react";
-import type { CanvasObject, ShapeKind, FillTextureKind, BorderStyle, PatternDensity } from "@/lib/canvas/types";
+import type { CanvasObject, ShapeKind, FillTextureKind, BorderStyle, PatternDensity, ConnectorObject } from "@/lib/canvas/types";
 import { VoiceField } from "./VoiceField";
 
 export type AlignMode = "left" | "right" | "center-h" | "top" | "bottom" | "center-v";
@@ -226,19 +226,33 @@ export function PropertiesPanel({
 
       {!multi && isRelation && (
         <>
-          <div className="space-y-2 mb-3">
-            <Label className="text-xs">Ετικέτα σχέσης</Label>
-            <VoiceField
-              singleLine
-              value={(object as { label?: string }).label ?? ""}
-              onChange={(v) => onChange({ label: v } as Partial<CanvasObject>)}
-              placeholder="π.χ. προκαλεί"
-              ariaLabel="Ετικέτα σχέσης"
-            />
-          </div>
-          {/* Arrow direction + dashed style */}
-          <div className="mb-3">
-            <Label className="text-xs mb-1.5 block">Στυλ σχέσης</Label>
+          <CollapsibleSection title="Περιεχόμενο">
+            <div className="space-y-2">
+              <Label className="text-xs">Ετικέτα σχέσης</Label>
+              <VoiceField
+                singleLine
+                value={(object as { label?: string }).label ?? ""}
+                onChange={(v) => onChange({ label: v } as Partial<CanvasObject>)}
+                placeholder="π.χ. προκαλεί"
+                ariaLabel="Ετικέτα σχέσης"
+              />
+              <p className="text-[10px] text-muted-foreground">
+                Διπλό κλικ πάνω στη γραμμή ανοίγει επεξεργασία με χρώμα κειμένου.
+              </p>
+            </div>
+            <div className="space-y-2">
+              <Label className="text-xs">{notesLabel}</Label>
+              <VoiceField
+                value={object.notes ?? ""}
+                onChange={(v) => onChange({ notes: v } as Partial<CanvasObject>)}
+                placeholder={notesPlaceholder}
+                rows={3}
+                ariaLabel={notesLabel}
+              />
+            </div>
+          </CollapsibleSection>
+
+          <CollapsibleSection title="Κατεύθυνση συσχέτισης">
             <div className="grid grid-cols-2 gap-1.5">
               <ToggleBtn
                 active={!!(object as { arrowStart?: boolean }).arrowStart}
@@ -260,74 +274,121 @@ export function PropertiesPanel({
               >
                 Βέλος τέλους
               </ToggleBtn>
-              <ToggleBtn
-                active={!!(object as { dashed?: boolean }).dashed}
-                onClick={() =>
-                  onChange({
-                    dashed: !(object as { dashed?: boolean }).dashed,
-                  } as Partial<CanvasObject>)
-                }
-              >
-                Διακεκομμένη
-              </ToggleBtn>
+              {/* Plain lines (not connectors) have no separate "Ποιότητα"
+                  section with its own dashed toggle, so they keep a basic
+                  one here. Connectors get the richer version below instead,
+                  once they're in Έντασης mode. */}
+              {!isConnector && (
+                <ToggleBtn
+                  active={!!(object as { dashed?: boolean }).dashed}
+                  onClick={() =>
+                    onChange({
+                      dashed: !(object as { dashed?: boolean }).dashed,
+                    } as Partial<CanvasObject>)
+                  }
+                >
+                  Διακεκομμένη
+                </ToggleBtn>
+              )}
             </div>
-          </div>
-          {/* Stage 6: connector style toggle */}
+          </CollapsibleSection>
+
+          {/* Ποιότητα σχέσης — connectors only */}
           {isConnector &&
             (() => {
-              const cs =
-                (object as { connectorStyle?: "line" | "lightning" }).connectorStyle ?? "line";
+              const co = object as ConnectorObject;
+              const cs = co.connectorStyle ?? "line";
+              const isIntensity = cs === "lightning";
+              const intensity = co.lightningIntensity ?? 4;
+              const hasDashLike = !!co.dashed || !!co.dotted;
               return (
-                <div className="mb-3">
-                  <Label className="text-xs mb-1.5 block">Στυλ σύνδεσης</Label>
+                <CollapsibleSection title="Ποιότητα σχέσης">
                   <div className="grid grid-cols-2 gap-1.5">
-                    <ToggleBtn
-                      active={cs === "line"}
-                      onClick={() => onChange({ connectorStyle: "line" } as Partial<CanvasObject>)}
-                    >
-                      Σχέση
+                    <ToggleBtn active={cs === "line"} onClick={() => onChange({ connectorStyle: "line" } as Partial<CanvasObject>)}>
+                      Απλή
                     </ToggleBtn>
-                    <ToggleBtn
-                      active={cs === "lightning"}
-                      onClick={() =>
-                        onChange({ connectorStyle: "lightning" } as Partial<CanvasObject>)
-                      }
-                    >
-                      Σχέση έντασης
+                    <ToggleBtn active={isIntensity} onClick={() => onChange({ connectorStyle: "lightning" } as Partial<CanvasObject>)}>
+                      Έντασης
                     </ToggleBtn>
                   </div>
-                </div>
+
+                  {isIntensity && (
+                    <>
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <Label className="text-xs">Βαθμός έντασης</Label>
+                          <span className="text-xs text-muted-foreground tabular-nums">{intensity}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] text-muted-foreground">Αραιό</span>
+                          <input
+                            type="range"
+                            min={1}
+                            max={10}
+                            step={1}
+                            value={intensity}
+                            onChange={(e) => onChange({ lightningIntensity: Number(e.target.value) } as Partial<CanvasObject>)}
+                            className="flex-1 h-1.5 accent-primary cursor-pointer"
+                          />
+                          <span className="text-[10px] text-muted-foreground">Πυκνό</span>
+                        </div>
+                      </div>
+
+                      <div className="pt-2 border-t border-border">
+                        <Label className="text-xs mb-1.5 block">Επιπλέον Χαρακτηριστικά Ποιότητας</Label>
+                        <p className="text-[10px] text-muted-foreground mb-1.5">Μπορούν να συνδυαστούν ταυτόχρονα.</p>
+                        <div className="grid grid-cols-2 gap-1.5 mb-2">
+                          <ToggleBtn active={!!co.dashed} onClick={() => onChange({ dashed: !co.dashed } as Partial<CanvasObject>)}>
+                            Διακεκομμένη
+                          </ToggleBtn>
+                          <ToggleBtn active={!!co.dotted} onClick={() => onChange({ dotted: !co.dotted } as Partial<CanvasObject>)}>
+                            Κουκκίδες
+                          </ToggleBtn>
+                          <ToggleBtn active={!!co.wavy} onClick={() => onChange({ wavy: !co.wavy } as Partial<CanvasObject>)}>
+                            Κυματιστές
+                          </ToggleBtn>
+                          <ToggleBtn active={!!co.tickMarks} onClick={() => onChange({ tickMarks: !co.tickMarks } as Partial<CanvasObject>)}>
+                            Κάθετες
+                          </ToggleBtn>
+                        </div>
+                        {hasDashLike && (
+                          <div className="grid grid-cols-2 gap-1.5 mb-2">
+                            <ToggleBtn active={(co.dashDensity ?? "sparse") === "sparse"} onClick={() => onChange({ dashDensity: "sparse" } as Partial<CanvasObject>)}>
+                              Αραιό
+                            </ToggleBtn>
+                            <ToggleBtn active={co.dashDensity === "dense"} onClick={() => onChange({ dashDensity: "dense" } as Partial<CanvasObject>)}>
+                              Πυκνό
+                            </ToggleBtn>
+                          </div>
+                        )}
+                        <SliderRow
+                          label="Πάχος γραμμής"
+                          value={co.strokeWidth ?? 2}
+                          min={0}
+                          max={12}
+                          step={0.5}
+                          onChange={(v) => onChange({ strokeWidth: v } as Partial<CanvasObject>)}
+                        />
+                        <SwatchRow
+                          label="Χρώμα (εφαρμόζεται και στα βέλη)"
+                          value={co.stroke ?? "#0F172A"}
+                          onChange={(c) => onChange({ stroke: c } as Partial<CanvasObject>)}
+                        />
+                        <SliderRow
+                          label="Διαφάνεια"
+                          value={Math.round((co.opacity ?? 1) * 100)}
+                          min={10}
+                          max={100}
+                          step={5}
+                          onChange={(v) => onChange({ opacity: v / 100 } as Partial<CanvasObject>)}
+                        />
+                      </div>
+                    </>
+                  )}
+                </CollapsibleSection>
               );
             })()}
-          {/* Lightning intensity slider */}
-          {isConnector &&
-            (object as { connectorStyle?: string }).connectorStyle === "lightning" &&
-            (() => {
-              const intensity = (object as { lightningIntensity?: number }).lightningIntensity ?? 4;
-              return (
-                <div className="mb-3">
-                  <div className="flex items-center justify-between mb-1">
-                    <Label className="text-xs">Βαθμός έντασης</Label>
-                    <span className="text-xs text-muted-foreground tabular-nums">{intensity}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-[10px] text-muted-foreground">Αραιό</span>
-                    <input
-                      type="range"
-                      min={1}
-                      max={10}
-                      step={1}
-                      value={intensity}
-                      onChange={(e) =>
-                        onChange({ lightningIntensity: Number(e.target.value) } as Partial<CanvasObject>)
-                      }
-                      className="flex-1 h-1.5 accent-primary cursor-pointer"
-                    />
-                    <span className="text-[10px] text-muted-foreground">Πυκνό</span>
-                  </div>
-                </div>
-              );
-            })()}
+
           {/* Stage 6: bend points clear, when any exist */}
           {(() => {
             const bp = (object as { bendPoints?: Array<unknown> }).bendPoints;
@@ -432,7 +493,7 @@ export function PropertiesPanel({
             const color =
               cur > 0 ? "text-green-600" : cur < 0 ? "text-red-600" : "text-muted-foreground";
             return (
-              <div className="mb-3">
+              <CollapsibleSection title="Συντελεστής επίδρασης">
                 <div className="flex items-center justify-between mb-1.5">
                   <Label className="text-xs">Συντελεστής επίδρασης</Label>
                   <span className={`text-xs font-semibold tabular-nums ${color}`}>{label}</span>
@@ -454,7 +515,7 @@ export function PropertiesPanel({
                 <p className="text-[10px] text-muted-foreground mt-1">
                   Θετικό = ενίσχυση · 0 = ουδέτερο · Αρνητικό = αντίθεση
                 </p>
-              </div>
+              </CollapsibleSection>
             );
           })()}
         </>
@@ -474,13 +535,6 @@ export function PropertiesPanel({
           onChange={(c) =>
             onChange({ stroke: c, ...(isSymbol ? { color: c } : {}) } as Partial<CanvasObject>)
           }
-        />
-      )}
-      {(isText || isShape) && (
-        <SwatchRow
-          label="Χρώμα κειμένου"
-          value={object.textColor ?? "#0F172A"}
-          onChange={(c) => onChange({ textColor: c })}
         />
       )}
 
@@ -508,7 +562,7 @@ export function PropertiesPanel({
       {!multi && isShape && (() => {
         const so = object as CanvasObject & {
           fill?: string; stroke?: string; strokeWidth?: number; opacity?: number;
-          fillOpacity?: number; fillTexture?: FillTextureKind; fillTextureDensity?: PatternDensity; fillTextureOpacity?: number;
+          fillOpacity?: number; fillTexture?: FillTextureKind; fillTextureColor?: string; fillTextureDensity?: PatternDensity; fillTextureOpacity?: number;
           borderStyle?: BorderStyle; borderDashDensity?: PatternDensity; borderOpacity?: number;
           width: number; height: number;
         };
@@ -546,6 +600,13 @@ export function PropertiesPanel({
                   ))}
                 </div>
               </div>
+              {hasTexture && (
+                <SwatchRow
+                  label="Χρώμα υφής"
+                  value={so.fillTextureColor ?? so.stroke ?? "#0F172A"}
+                  onChange={(c) => onChange({ fillTextureColor: c } as Partial<CanvasObject>)}
+                />
+              )}
               {hasTexture && (
                 <div>
                   <Label className="text-xs mb-1.5 block">Πυκνότητα υφής</Label>
