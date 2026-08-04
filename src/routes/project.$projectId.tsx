@@ -173,7 +173,6 @@ function Editor() {
     if (!user) return;
     setSavingCollabCopy(true);
     try {
-      await saveApiRef.current?.save().catch(() => {});
       await saveMyCollabCopy(projectId, user.uid);
       toast.success("Αποθηκεύτηκε στα Έργα μου");
     } catch {
