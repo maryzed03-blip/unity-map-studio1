@@ -18,6 +18,9 @@ import {
   type SymbolKind,
   type SymbolObject,
   type TextObject,
+  type FillTextureKind,
+  type PatternDensity,
+  type BorderStyle,
 } from "@/lib/canvas/types";
 import { hashCanvasState } from "@/lib/canvas/schema";
 import { mapStore } from "@/lib/canvas/storage";
@@ -3070,36 +3073,161 @@ function ObjectNode({
   return null;
 }
 
+/** Tile size (userSpaceOnUse) for each density — smaller tile = denser pattern. */
+function densityTile(density: PatternDensity | undefined): number {
+  return density === "sparse" ? 16 : density === "dense" ? 6 : 10; // "medium" default
+}
+
+/** One reusable SVG <pattern> def per texture kind. Rendered inline right
+ *  before the shape that uses it — SVG pattern ids just need to be unique
+ *  document-wide, they don't need to live in one central <defs>. */
+function TexturePatternDef({
+  id,
+  kind,
+  density,
+  color,
+  opacity,
+}: {
+  id: string;
+  kind: FillTextureKind;
+  density: PatternDensity | undefined;
+  color: string;
+  opacity: number;
+}) {
+  const tile = densityTile(density);
+  const common = { stroke: color, strokeOpacity: opacity, fill: "none" as const };
+  let content: React.ReactNode;
+  if (kind === "horizontal") {
+    content = <line x1={0} y1={tile / 2} x2={tile} y2={tile / 2} {...common} />;
+  } else if (kind === "vertical") {
+    content = <line x1={tile / 2} y1={0} x2={tile / 2} y2={tile} {...common} />;
+  } else if (kind === "diagonal") {
+    content = (
+      <g>
+        <line x1={0} y1={tile} x2={tile} y2={0} {...common} />
+        <line x1={-tile / 2} y1={tile / 2} x2={tile / 2} y2={-tile / 2} {...common} />
+        <line x1={tile / 2} y1={tile * 1.5} x2={tile * 1.5} y2={tile / 2} {...common} />
+      </g>
+    );
+  } else if (kind === "cross") {
+    content = (
+      <g>
+        <line x1={0} y1={tile} x2={tile} y2={0} {...common} />
+        <line x1={0} y1={0} x2={tile} y2={tile} {...common} />
+      </g>
+    );
+  } else if (kind === "grid") {
+    content = (
+      <g>
+        <line x1={0} y1={0} x2={tile} y2={0} {...common} />
+        <line x1={0} y1={0} x2={0} y2={tile} {...common} />
+      </g>
+    );
+  } else if (kind === "dots") {
+    content = <circle cx={tile / 2} cy={tile / 2} r={Math.max(0.8, tile / 8)} fill={color} fillOpacity={opacity} />;
+  } else if (kind === "wave") {
+    const h = tile / 2;
+    content = (
+      <path
+        d={`M0,${h} Q${tile / 4},0 ${tile / 2},${h} T${tile},${h}`}
+        stroke={color}
+        strokeOpacity={opacity}
+        fill="none"
+      />
+    );
+  } else {
+    content = null;
+  }
+  return (
+    <defs>
+      <pattern id={id} width={tile} height={tile} patternUnits="userSpaceOnUse">
+        {content}
+      </pattern>
+    </defs>
+  );
+}
+
+function borderDashArray(style: BorderStyle | undefined, density: PatternDensity | undefined, sw: number): string | undefined {
+  if (!style || style === "solid" || style === "none") return undefined;
+  const unit = Math.max(1.5, sw);
+  const gapMul = density === "sparse" ? 3.5 : density === "dense" ? 1.5 : 2.5; // medium default
+  if (style === "dashed") return `${unit * 3} ${unit * gapMul}`;
+  if (style === "dotted") return `0.1 ${unit * gapMul}`;
+  if (style === "dash-dot") return `${unit * 3} ${unit * gapMul} 0.1 ${unit * gapMul}`;
+  return undefined;
+}
+
+/** Regular shapes cap border thickness at 12px; shapes larger than ~300px
+ *  on their longest side get more headroom (up to 24px) so a thick border
+ *  doesn't look proportionally tiny on them. Used by the Properties panel
+ *  slider bound, not by rendering itself (rendering just uses whatever
+ *  strokeWidth is already stored). */
+export function maxBorderWidthFor(o: { width: number; height: number }): number {
+  return Math.max(o.width, o.height) > 300 ? 24 : 12;
+}
+
 function renderShape(o: ShapeObject, fill: string, stroke: string, sw: number) {
   const { x, y, width: w, height: h, shapeKind } = o;
   const r = o.borderRadius ?? 0;
+  const fillOpacity = (o.fillOpacity ?? 100) / 100;
+  const borderOpacity = (o.borderOpacity ?? 100) / 100;
+  const borderStyle = o.borderStyle ?? "solid";
+  const strokeDasharray = borderDashArray(borderStyle, o.borderDashDensity, sw);
+  const strokeColor = borderStyle === "none" ? "none" : stroke;
+  const strokeLinecap: "round" | undefined = borderStyle === "dotted" || borderStyle === "dash-dot" ? "round" : undefined;
+  const hasTexture = (o.fillTexture ?? "none") !== "none";
+  const patternId = `texture-${o.id}`;
+
+  const baseProps = {
+    fill,
+    fillOpacity,
+    stroke: strokeColor,
+    strokeOpacity: borderOpacity,
+    strokeWidth: sw,
+    strokeDasharray,
+    strokeLinecap,
+  };
+  const textureProps = hasTexture
+    ? { fill: `url(#${patternId})`, stroke: "none" as const }
+    : null;
+
+  const textureDefs = hasTexture ? (
+    <TexturePatternDef
+      id={patternId}
+      kind={o.fillTexture as FillTextureKind}
+      density={o.fillTextureDensity}
+      color={stroke}
+      opacity={(o.fillTextureOpacity ?? 100) / 100}
+    />
+  ) : null;
+
   if (shapeKind === "circle" || shapeKind === "oval") {
+    const geo = { cx: x + w / 2, cy: y + h / 2, rx: w / 2, ry: h / 2 };
     return (
-      <ellipse
-        cx={x + w / 2}
-        cy={y + h / 2}
-        rx={w / 2}
-        ry={h / 2}
-        fill={fill}
-        stroke={stroke}
-        strokeWidth={sw}
-      />
+      <>
+        {textureDefs}
+        <ellipse {...geo} {...baseProps} />
+        {textureProps && <ellipse {...geo} {...textureProps} />}
+      </>
     );
   }
   if (shapeKind === "triangle" || shapeKind === "diamond" || shapeKind === "polygon") {
+    const points = polygonPoints(shapeKind, x, y, w, h);
     return (
-      <polygon
-        points={polygonPoints(shapeKind, x, y, w, h)}
-        fill={fill}
-        stroke={stroke}
-        strokeWidth={sw}
-        strokeLinejoin="round"
-      />
+      <>
+        {textureDefs}
+        <polygon points={points} {...baseProps} strokeLinejoin="round" />
+        {textureProps && <polygon points={points} {...textureProps} />}
+      </>
     );
   }
   // rectangle / rounded-rectangle / square
   return (
-    <rect x={x} y={y} width={w} height={h} fill={fill} stroke={stroke} strokeWidth={sw} rx={r} />
+    <>
+      {textureDefs}
+      <rect x={x} y={y} width={w} height={h} rx={r} {...baseProps} />
+      {textureProps && <rect x={x} y={y} width={w} height={h} rx={r} {...textureProps} />}
+    </>
   );
 }
 
