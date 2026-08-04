@@ -86,6 +86,9 @@ export interface ShapeObject extends BaseObject {
   /** Fill opacity (0–100), independent of the shape's overall opacity. */
   fillOpacity?: number;
   fillTexture?: FillTextureKind;
+  /** Independent color for the texture pattern lines/dots — defaults to
+   *  the border color if not set, but can be different. */
+  fillTextureColor?: string;
   /** Only meaningful when fillTexture !== "none". */
   fillTextureDensity?: PatternDensity;
   /** Independent of fillOpacity — lets the texture pattern be lighter/darker
@@ -126,6 +129,8 @@ export interface LineObject extends BaseObject {
   arrowStart?: boolean;
   arrowEnd?: boolean;
   label?: string;
+  /** Text color for the label — independent of the line's own stroke color. */
+  labelColor?: string;
   /** Standalone lines can also carry a relationship value. */
   relationshipValue?: RelationshipValue;
   /** Stage 6: optional bend points between start and end. */
@@ -175,9 +180,20 @@ export interface ConnectorObject extends BaseObject {
   arrowStart?: boolean;
   arrowEnd?: boolean;
   dashed?: boolean;
+  /** Combinable with dashed — genuinely independent toggles, not a radio
+   *  group. Only shown/used in "Έντασης" quality mode. */
+  dotted?: boolean;
+  wavy?: boolean;
+  /** "Κάθετες" — short perpendicular tick marks along the line (genogram
+   *  "cutoff relationship" convention). */
+  tickMarks?: boolean;
+  /** Only meaningful when dashed and/or dotted is on. */
+  dashDensity?: "sparse" | "dense";
   /** @deprecated use routeType === "curved". Kept for legacy projects. */
   curved?: boolean;
   label?: string;
+  /** Text color for the label — independent of the connector's own stroke color. */
+  labelColor?: string;
   labelStyle?: { italic?: boolean; bold?: boolean; underline?: boolean };
   relationshipValue?: RelationshipValue;
   /** Stage 6: optional bend points between source and target. */
