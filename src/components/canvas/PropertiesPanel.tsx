@@ -24,6 +24,7 @@ import {
   Diamond,
   Hexagon,
   ChevronDown,
+  Replace,
   Lock,
   Unlock,
   Paintbrush,
@@ -313,27 +314,29 @@ export function PropertiesPanel({
                   </div>
 
                   {isIntensity && (
-                    <>
-                      <div>
-                        <div className="flex items-center justify-between mb-1">
-                          <Label className="text-xs">Βαθμός έντασης</Label>
-                          <span className="text-xs text-muted-foreground tabular-nums">{intensity}</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <span className="text-[10px] text-muted-foreground">Αραιό</span>
-                          <input
-                            type="range"
-                            min={1}
-                            max={10}
-                            step={1}
-                            value={intensity}
-                            onChange={(e) => onChange({ lightningIntensity: Number(e.target.value) } as Partial<CanvasObject>)}
-                            className="flex-1 h-1.5 accent-primary cursor-pointer"
-                          />
-                          <span className="text-[10px] text-muted-foreground">Πυκνό</span>
-                        </div>
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <Label className="text-xs">Βαθμός έντασης</Label>
+                        <span className="text-xs text-muted-foreground tabular-nums">{intensity}</span>
                       </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] text-muted-foreground">Αραιό</span>
+                        <input
+                          type="range"
+                          min={1}
+                          max={10}
+                          step={1}
+                          value={intensity}
+                          onChange={(e) => onChange({ lightningIntensity: Number(e.target.value) } as Partial<CanvasObject>)}
+                          className="flex-1 h-1.5 accent-primary cursor-pointer"
+                        />
+                        <span className="text-[10px] text-muted-foreground">Πυκνό</span>
+                      </div>
+                    </div>
+                  )}
 
+                  {(() => {
+                    return (
                       <div className="pt-2 border-t border-border">
                         <Label className="text-xs mb-1.5 block">Επιπλέον Χαρακτηριστικά Ποιότητας</Label>
                         <p className="text-[10px] text-muted-foreground mb-1.5">Μπορούν να συνδυαστούν ταυτόχρονα.</p>
@@ -383,8 +386,8 @@ export function PropertiesPanel({
                           onChange={(v) => onChange({ opacity: v / 100 } as Partial<CanvasObject>)}
                         />
                       </div>
-                    </>
-                  )}
+                    );
+                  })()}
                 </CollapsibleSection>
               );
             })()}
@@ -440,49 +443,37 @@ export function PropertiesPanel({
               </Button>
             </div>
           )}
-          {/* Route type — connectors only */}
-          {isConnector &&
+          {/* Path editing — lines and connectors alike. Replaces the old
+              3-way straight/curved/auto toggle with one action: turn on
+              curve-control dragging, so the user grabs a point directly on
+              the line and shapes it by hand instead of picking from a list. */}
+          {isRelation &&
             (() => {
-              const connStyle = (object as { connectorStyle?: string }).connectorStyle ?? "line";
-              const c = object as {
-                routeType?: string;
-                curved?: boolean;
-              };
-              const current = c.routeType === "auto" || c.routeType === "zigzag" || c.routeType === "orthogonal"
-                ? "auto"
-                : c.routeType ?? (c.curved ? "curved" : "straight");
-
-              // Lightning only supports straight/auto
-              const opts = connStyle === "lightning"
-                ? [
-                    { id: "straight" as const, label: "Ευθεία" },
-                    { id: "auto" as const, label: "Αυτόματη" },
-                  ]
-                : [
-                    { id: "straight" as const, label: "Ευθεία" },
-                    { id: "curved" as const, label: "Καμπύλη" },
-                    { id: "auto" as const, label: "Αυτόματη" },
-                  ];
-
+              const co = object as ConnectorObject;
+              const lo = object as unknown as { lineKind?: string };
+              const isCurvedNow = isConnector
+                ? (co.routeType === "curved" || (!co.routeType && co.curved))
+                : lo.lineKind === "curved";
               return (
                 <div className="mb-3">
-                  <Label className="text-xs mb-1.5 block">Διαδρομή γραμμής</Label>
-                  <div className="grid grid-cols-3 gap-1.5">
-                    {opts.map((o) => (
-                      <ToggleBtn
-                        key={o.id}
-                        active={current === o.id}
-                        onClick={() =>
-                          onChange({
-                            routeType: o.id === "auto" ? "zigzag" : o.id,
-                            curved: o.id === "curved",
-                          } as Partial<CanvasObject>)
-                        }
-                      >
-                        {o.label}
-                      </ToggleBtn>
-                    ))}
-                  </div>
+                  <Button
+                    variant={isCurvedNow ? "default" : "outline"}
+                    size="sm"
+                    className="w-full text-xs gap-1.5"
+                    onClick={() =>
+                      isConnector
+                        ? onChange({ routeType: "curved", curved: true } as Partial<CanvasObject>)
+                        : onChange({ lineKind: "curved" } as Partial<CanvasObject>)
+                    }
+                  >
+                    <Replace className="h-3.5 w-3.5" />
+                    Επεξεργασία διαδρομής
+                  </Button>
+                  {isCurvedNow && (
+                    <p className="text-[10px] text-muted-foreground mt-1.5">
+                      Πιάσε το σημείο πάνω στη γραμμή και σύρε το για να την κυρτώσεις.
+                    </p>
+                  )}
                 </div>
               );
             })()}
