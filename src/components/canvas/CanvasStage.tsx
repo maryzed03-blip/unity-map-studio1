@@ -1579,15 +1579,21 @@ export function CanvasStage({
         return {
           ...s,
           objects: s.objects.map((o) => {
-            if (o.type !== "connector") return o;
-            // Stage 6.1: respect manual endpoint placement.
-            if (o.magnetLocked) return o;
-            if (!affected.has(o.sourceObjectId) && !affected.has(o.targetObjectId)) return o;
-            const src = byId.get(o.sourceObjectId),
-              tgt = byId.get(o.targetObjectId);
-            if (!src || !tgt) return o;
-            const pair = pickMagnetPair(src, tgt);
-            return { ...o, sourceMagnet: pair.sourceMagnet, targetMagnet: pair.targetMagnet };
+            if (o.type === "connector") {
+              // Stage 6.1: respect manual endpoint placement.
+              if (o.magnetLocked) return o;
+              if (!affected.has(o.sourceObjectId) && !affected.has(o.targetObjectId)) return o;
+              const src = byId.get(o.sourceObjectId),
+                tgt = byId.get(o.targetObjectId);
+              if (!src || !tgt) return o;
+              const pair = pickMagnetPair(src, tgt);
+              return { ...o, sourceMagnet: pair.sourceMagnet, targetMagnet: pair.targetMagnet };
+            }
+            // Bump updatedAt on whatever was actually dragged, so live-sync
+            // merge knows this is a fresh local edit and won't let a poll
+            // that lands right after silently revert it back.
+            if (affected.has(o.id)) return { ...o, updatedAt: now() } as CanvasObject;
+            return o;
           }),
         };
       });
@@ -1624,6 +1630,10 @@ export function CanvasStage({
       finalizeHistory();
     }
     if (d.kind === "curve-control" || d.kind === "bend" || d.kind === "line-ep") {
+      setState((s) => ({
+        ...s,
+        objects: s.objects.map((o) => (o.id === d.id ? ({ ...o, updatedAt: now() } as CanvasObject) : o)),
+      }));
       finalizeHistory();
     }
   };
