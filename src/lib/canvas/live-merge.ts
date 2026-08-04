@@ -31,13 +31,25 @@ export function mergeLiveObjects(
   recentWindowMs: number,
   nowMs: number = Date.now(),
 ): CanvasObject[] {
-  // Snapshot "seen before THIS call" before we fold in the current ids.
-  // We need this to distinguish "this id is in current remote" (continue)
-  // from "this id was in a prior remote but no longer" (delete).
-  const remoteIds = new Set(remote.map((o) => o.id));
-  const merged: CanvasObject[] = [...remote];
+  const remoteById = new Map(remote.map((o) => [o.id, o] as const));
+  const localById = new Map(local.map((o) => [o.id, o] as const));
+  const merged: CanvasObject[] = [];
+
+  // Walk the remote snapshot, but for any object that was just modified
+  // LOCALLY (not merely created — an edit to something that already
+  // existed, e.g. dragging a curve control point), keep the local
+  // version instead of blindly taking remote. Without this, a poll that
+  // lands in the gap between "user makes an edit" and "that edit's debounced
+  // save reaches the server" silently reverts the edit right back to its
+  // pre-edit state — the change "goes in and is immediately undone".
+  for (const ro of remote) {
+    const lo = localById.get(ro.id);
+    const locallyRecent =
+      !!lo && typeof lo.updatedAt === "number" && nowMs - lo.updatedAt < recentWindowMs;
+    merged.push(locallyRecent ? lo! : ro);
+  }
   for (const lo of local) {
-    if (remoteIds.has(lo.id)) continue;
+    if (remoteById.has(lo.id)) continue; // already resolved above
     const seenBefore = seenRemoteIds.has(lo.id);
     const recentlyCreated =
       typeof lo.createdAt === "number" && nowMs - lo.createdAt < recentWindowMs;
@@ -47,6 +59,6 @@ export function mergeLiveObjects(
     // else: previously seen remotely, now absent → drop as remote delete.
   }
   // Update seen set with current snapshot ids for next call.
-  for (const id of remoteIds) seenRemoteIds.add(id);
+  for (const id of remoteById.keys()) seenRemoteIds.add(id);
   return merged;
 }
