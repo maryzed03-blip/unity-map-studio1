@@ -2729,6 +2729,13 @@ function ObjectNode({
   onInfoClick?: () => void;
   obstacles?: Rect[];
 }) {
+  // Manual double-click detection for connectors — native onDoubleClick
+  // proved unreliable here (the pointerdown handler's stopPropagation for
+  // "connectors can't be dragged directly" seems to interfere with the
+  // browser's native dblclick synthesis in some browsers). Tracking our
+  // own last-pointerdown timestamp sidesteps that entirely.
+  const lastPointerDownRef = useRef(0);
+
   // keep selectedIdsRef updated whenever a node renders selected
   if (selected && !selectedIdsRef.current.includes(o.id)) {
     selectedIdsRef.current = [...selectedIdsRef.current, o.id];
@@ -3079,7 +3086,21 @@ function ObjectNode({
             : connectorPath(route, x1, y1, x2, y2, o.sourceMagnet, o.targetMagnet, o.curveControl);
     const ls = o.labelStyle ?? { italic: true };
     return (
-      <g {...common} color={stroke} onDoubleClick={(e) => { e.stopPropagation(); onStartEdit?.(); }}>
+      <g
+        {...common}
+        color={stroke}
+        onPointerDown={(e) => {
+          const now = Date.now();
+          const isDoubleClick = now - lastPointerDownRef.current < 400;
+          lastPointerDownRef.current = now;
+          if (isDoubleClick) {
+            e.stopPropagation();
+            onStartEdit?.();
+            return;
+          }
+          common.onPointerDown(e);
+        }}
+      >
         <path
           d={d}
           fill="none"
