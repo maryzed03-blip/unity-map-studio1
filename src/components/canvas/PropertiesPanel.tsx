@@ -23,13 +23,13 @@ import {
   Triangle,
   Diamond,
   Hexagon,
-  Replace,
+  ChevronDown,
   Lock,
   Unlock,
   Paintbrush,
   ClipboardPaste,
 } from "lucide-react";
-import type { CanvasObject, ShapeKind } from "@/lib/canvas/types";
+import type { CanvasObject, ShapeKind, FillTextureKind, BorderStyle, PatternDensity } from "@/lib/canvas/types";
 import { VoiceField } from "./VoiceField";
 
 export type AlignMode = "left" | "right" | "center-h" | "top" | "bottom" | "center-v";
@@ -160,23 +160,32 @@ export function PropertiesPanel({
       )}
 
       {!multi && isShape && "text" in object && (
-        <div className="space-y-2 mb-3">
-          <Label className="text-xs">Ετικέτα</Label>
-          <VoiceField
-            singleLine
-            value={(object as { text?: string }).text ?? ""}
-            onChange={(v) => onChange({ text: v } as Partial<CanvasObject>)}
-            placeholder="Προαιρετικό"
-            ariaLabel="Ετικέτα σχήματος"
-          />
-        </div>
+        <CollapsibleSection title="Περιεχόμενο">
+          <div className="space-y-2">
+            <Label className="text-xs">Ετικέτα</Label>
+            <VoiceField
+              singleLine
+              value={(object as { text?: string }).text ?? ""}
+              onChange={(v) => onChange({ text: v } as Partial<CanvasObject>)}
+              placeholder="Προαιρετικό"
+              ariaLabel="Ετικέτα σχήματος"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label className="text-xs">Σημειώσεις</Label>
+            <VoiceField
+              value={object.notes ?? ""}
+              onChange={(v) => onChange({ notes: v } as Partial<CanvasObject>)}
+              placeholder="Πρόσθετες πληροφορίες, δεν εμφανίζονται στον χάρτη…"
+              rows={3}
+              ariaLabel="Σημειώσεις σχήματος"
+            />
+          </div>
+        </CollapsibleSection>
       )}
 
       {!multi && isShape && "shapeKind" in object && (
-        <div className="space-y-2 mb-3">
-          <Label className="text-xs flex items-center gap-1.5">
-            <Replace className="h-3 w-3" /> Αντικατάσταση σχήματος
-          </Label>
+        <CollapsibleSection title="Μορφή σχήματος">
           <p className="text-[10px] text-muted-foreground -mt-1">
             Η μορφοποίηση (χρώμα, μέγεθος, κείμενο) διατηρείται.
           </p>
@@ -199,7 +208,7 @@ export function PropertiesPanel({
               );
             })}
           </div>
-        </div>
+        </CollapsibleSection>
       )}
 
       {!multi && isFrame && (
@@ -451,20 +460,22 @@ export function PropertiesPanel({
         </>
       )}
 
-      {showFill && (
+      {!isShape && showFill && (
         <SwatchRow
           label="Γέμισμα"
           value={object.fill ?? "#FFFFFF"}
           onChange={(c) => onChange({ fill: c })}
         />
       )}
-      <SwatchRow
-        label={isRelation ? "Χρώμα γραμμής" : isDrawing ? "Χρώμα μολυβιού" : "Περίγραμμα"}
-        value={object.stroke ?? "#0F172A"}
-        onChange={(c) =>
-          onChange({ stroke: c, ...(isSymbol ? { color: c } : {}) } as Partial<CanvasObject>)
-        }
-      />
+      {!isShape && (
+        <SwatchRow
+          label={isRelation ? "Χρώμα γραμμής" : isDrawing ? "Χρώμα μολυβιού" : "Περίγραμμα"}
+          value={object.stroke ?? "#0F172A"}
+          onChange={(c) =>
+            onChange({ stroke: c, ...(isSymbol ? { color: c } : {}) } as Partial<CanvasObject>)
+          }
+        />
+      )}
       {(isText || isShape) && (
         <SwatchRow
           label="Χρώμα κειμένου"
@@ -473,22 +484,173 @@ export function PropertiesPanel({
         />
       )}
 
-      <SliderRow
-        label={isRelation || isDrawing ? "Πάχος γραμμής" : "Πάχος περιγράμματος"}
-        value={object.strokeWidth ?? 1}
-        min={0}
-        max={12}
-        step={1}
-        onChange={(v) => onChange({ strokeWidth: v })}
-      />
-      <SliderRow
-        label="Αδιαφάνεια"
-        value={Math.round((object.opacity ?? 1) * 100)}
-        min={10}
-        max={100}
-        step={5}
-        onChange={(v) => onChange({ opacity: v / 100 })}
-      />
+      {!isShape && (
+        <SliderRow
+          label={isRelation || isDrawing ? "Πάχος γραμμής" : "Πάχος περιγράμματος"}
+          value={object.strokeWidth ?? 1}
+          min={0}
+          max={12}
+          step={1}
+          onChange={(v) => onChange({ strokeWidth: v })}
+        />
+      )}
+      {!isShape && (
+        <SliderRow
+          label="Αδιαφάνεια"
+          value={Math.round((object.opacity ?? 1) * 100)}
+          min={10}
+          max={100}
+          step={5}
+          onChange={(v) => onChange({ opacity: v / 100 })}
+        />
+      )}
+
+      {!multi && isShape && (() => {
+        const so = object as CanvasObject & {
+          fill?: string; stroke?: string; strokeWidth?: number; opacity?: number;
+          fillOpacity?: number; fillTexture?: FillTextureKind; fillTextureDensity?: PatternDensity; fillTextureOpacity?: number;
+          borderStyle?: BorderStyle; borderDashDensity?: PatternDensity; borderOpacity?: number;
+          width: number; height: number;
+        };
+        const hasTexture = (so.fillTexture ?? "none") !== "none";
+        const borderStyle = so.borderStyle ?? "solid";
+        const hasDashDensity = borderStyle === "dashed" || borderStyle === "dotted" || borderStyle === "dash-dot";
+        const maxBorder = Math.max(so.width, so.height) > 300 ? 24 : 12;
+        return (
+          <>
+            <CollapsibleSection title="Γέμισμα">
+              <SwatchRow label="Χρώμα γεμίσματος" value={so.fill ?? "#FFFFFF"} onChange={(c) => onChange({ fill: c })} />
+              <SliderRow
+                label="Διαφάνεια χρώματος"
+                value={so.fillOpacity ?? 100}
+                min={0}
+                max={100}
+                step={5}
+                onChange={(v) => onChange({ fillOpacity: v } as Partial<CanvasObject>)}
+              />
+              <div>
+                <Label className="text-xs mb-1.5 block">Υφή γεμίσματος</Label>
+                <div className="grid grid-cols-2 gap-1.5">
+                  {TEXTURE_OPTIONS.map((t) => (
+                    <button
+                      key={t.kind}
+                      onClick={() => onChange({ fillTexture: t.kind } as Partial<CanvasObject>)}
+                      className={`h-8 rounded-md border text-[11px] transition-colors ${
+                        (so.fillTexture ?? "none") === t.kind
+                          ? "border-primary bg-primary/10 text-primary"
+                          : "border-border hover:bg-muted text-muted-foreground"
+                      }`}
+                    >
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {hasTexture && (
+                <div>
+                  <Label className="text-xs mb-1.5 block">Πυκνότητα υφής</Label>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {DENSITY_OPTIONS.map((d) => (
+                      <button
+                        key={d.kind}
+                        onClick={() => onChange({ fillTextureDensity: d.kind } as Partial<CanvasObject>)}
+                        className={`h-8 rounded-md border text-[11px] transition-colors ${
+                          (so.fillTextureDensity ?? "medium") === d.kind
+                            ? "border-primary bg-primary/10 text-primary"
+                            : "border-border hover:bg-muted text-muted-foreground"
+                        }`}
+                      >
+                        {d.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {hasTexture && (
+                <SliderRow
+                  label="Διαφάνεια υφής"
+                  value={so.fillTextureOpacity ?? 100}
+                  min={0}
+                  max={100}
+                  step={5}
+                  onChange={(v) => onChange({ fillTextureOpacity: v } as Partial<CanvasObject>)}
+                />
+              )}
+            </CollapsibleSection>
+
+            <CollapsibleSection title="Περίγραμμα">
+              <SwatchRow label="Χρώμα περιγράμματος" value={so.stroke ?? "#0F172A"} onChange={(c) => onChange({ stroke: c })} />
+              <div>
+                <Label className="text-xs mb-1.5 block">Τύπος περιγράμματος</Label>
+                <div className="grid grid-cols-2 gap-1.5">
+                  {BORDER_STYLE_OPTIONS.map((b) => (
+                    <button
+                      key={b.kind}
+                      onClick={() => onChange({ borderStyle: b.kind } as Partial<CanvasObject>)}
+                      className={`h-8 rounded-md border text-[11px] transition-colors ${
+                        borderStyle === b.kind
+                          ? "border-primary bg-primary/10 text-primary"
+                          : "border-border hover:bg-muted text-muted-foreground"
+                      }`}
+                    >
+                      {b.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {hasDashDensity && (
+                <div>
+                  <Label className="text-xs mb-1.5 block">Πυκνότητα διακεκομμένου</Label>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {DENSITY_OPTIONS.map((d) => (
+                      <button
+                        key={d.kind}
+                        onClick={() => onChange({ borderDashDensity: d.kind } as Partial<CanvasObject>)}
+                        className={`h-8 rounded-md border text-[11px] transition-colors ${
+                          (so.borderDashDensity ?? "medium") === d.kind
+                            ? "border-primary bg-primary/10 text-primary"
+                            : "border-border hover:bg-muted text-muted-foreground"
+                        }`}
+                      >
+                        {d.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <SliderRow
+                label="Πάχος περιγράμματος"
+                value={Math.min(so.strokeWidth ?? 1, maxBorder)}
+                min={0}
+                max={maxBorder}
+                step={0.5}
+                onChange={(v) => onChange({ strokeWidth: v } as Partial<CanvasObject>)}
+              />
+              <SliderRow
+                label="Διαφάνεια περιγράμματος"
+                value={so.borderOpacity ?? 100}
+                min={0}
+                max={100}
+                step={5}
+                onChange={(v) => onChange({ borderOpacity: v } as Partial<CanvasObject>)}
+              />
+            </CollapsibleSection>
+
+            <CollapsibleSection title="Συνολική εμφάνιση">
+              <SliderRow
+                label="Συνολική διαφάνεια σχήματος"
+                value={Math.round((so.opacity ?? 1) * 100)}
+                min={10}
+                max={100}
+                step={5}
+                onChange={(v) => onChange({ opacity: v / 100 } as Partial<CanvasObject>)}
+              />
+            </CollapsibleSection>
+          </>
+        );
+      })()}
+
+
       {(isText || isShape) && "fontSize" in object && (
         <SliderRow
           label="Μέγεθος κειμένου"
@@ -587,7 +749,7 @@ export function PropertiesPanel({
       )}
 
       {/* Notes / info */}
-      {!multi && (
+      {!multi && !isShape && (
         <div className="mt-4 pt-3 border-t border-border">
           <Label className="text-xs mb-1.5 block">{notesLabel}</Label>
           <VoiceField
@@ -674,6 +836,51 @@ function ToggleBtn({
     </button>
   );
 }
+
+function CollapsibleSection({
+  title,
+  defaultOpen = true,
+  children,
+}: {
+  title: string;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <details className="group mb-3 border border-border rounded-lg overflow-hidden" open={defaultOpen}>
+      <summary className="flex items-center justify-between px-3 py-2 cursor-pointer select-none bg-muted/50 hover:bg-muted text-xs font-semibold uppercase tracking-wide text-muted-foreground [&::-webkit-details-marker]:hidden">
+        {title}
+        <ChevronDown className="h-3.5 w-3.5 transition-transform group-open:rotate-180" />
+      </summary>
+      <div className="p-3 space-y-3">{children}</div>
+    </details>
+  );
+}
+
+const TEXTURE_OPTIONS: Array<{ kind: FillTextureKind; label: string }> = [
+  { kind: "none", label: "Χωρίς υφή" },
+  { kind: "diagonal", label: "Διαγώνιες" },
+  { kind: "horizontal", label: "Οριζόντιες" },
+  { kind: "vertical", label: "Κάθετες" },
+  { kind: "cross", label: "Διασταυρούμενες" },
+  { kind: "dots", label: "Κουκκίδες" },
+  { kind: "grid", label: "Πλέγμα" },
+  { kind: "wave", label: "Κυματιστές" },
+];
+
+const BORDER_STYLE_OPTIONS: Array<{ kind: BorderStyle; label: string }> = [
+  { kind: "solid", label: "Συνεχές" },
+  { kind: "dashed", label: "Διακεκομμένο" },
+  { kind: "dotted", label: "Κουκκίδες" },
+  { kind: "dash-dot", label: "Παύλα–τελεία" },
+  { kind: "none", label: "Χωρίς περίγραμμα" },
+];
+
+const DENSITY_OPTIONS: Array<{ kind: PatternDensity; label: string }> = [
+  { kind: "sparse", label: "Αραιή" },
+  { kind: "medium", label: "Μέτρια" },
+  { kind: "dense", label: "Πυκνή" },
+];
 
 function SwatchRow({
   label,
