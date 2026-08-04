@@ -53,6 +53,11 @@ interface Props {
   onCopyStyle?: () => void;
   onPasteStyle?: () => void;
   hasStyleClipboard?: boolean;
+  /** Breaks the line/connector into draggable segments (bend points) —
+   *  needs the object's resolved on-canvas endpoints, which only
+   *  CanvasStage has, so this is a dedicated callback rather than a
+   *  generic onChange patch. */
+  onSegmentPath?: () => void;
 }
 
 const SWATCHES = [
@@ -97,6 +102,7 @@ export function PropertiesPanel({
   onCopyStyle,
   onPasteStyle,
   hasStyleClipboard,
+  onSegmentPath,
 }: Props) {
   const isLine = object.type === "line";
   const isConnector = object.type === "connector";
@@ -237,9 +243,6 @@ export function PropertiesPanel({
                 placeholder="π.χ. προκαλεί"
                 ariaLabel="Ετικέτα σχέσης"
               />
-              <p className="text-[10px] text-muted-foreground">
-                Διπλό κλικ πάνω στη γραμμή ανοίγει επεξεργασία με χρώμα κειμένου.
-              </p>
             </div>
             <div className="space-y-2">
               <Label className="text-xs">{notesLabel}</Label>
@@ -443,35 +446,53 @@ export function PropertiesPanel({
               </Button>
             </div>
           )}
-          {/* Path editing — lines and connectors alike. Replaces the old
-              3-way straight/curved/auto toggle with one action: turn on
-              curve-control dragging, so the user grabs a point directly on
-              the line and shapes it by hand instead of picking from a list. */}
+          {/* Path editing — lines and connectors alike. Two ways to
+              hand-shape the line instead of picking from a preset list:
+              a smooth curve-control point, or breaking it into draggable
+              segments. */}
           {isRelation &&
             (() => {
               const co = object as ConnectorObject;
-              const lo = object as unknown as { lineKind?: string };
+              const lo = object as unknown as { lineKind?: string; bendPoints?: Array<unknown> };
               const isCurvedNow = isConnector
                 ? (co.routeType === "curved" || (!co.routeType && co.curved))
                 : lo.lineKind === "curved";
+              const hasSegments = (lo.bendPoints?.length ?? 0) > 0;
               return (
-                <div className="mb-3">
-                  <Button
-                    variant={isCurvedNow ? "default" : "outline"}
-                    size="sm"
-                    className="w-full text-xs gap-1.5"
-                    onClick={() =>
-                      isConnector
-                        ? onChange({ routeType: "curved", curved: true } as Partial<CanvasObject>)
-                        : onChange({ lineKind: "curved" } as Partial<CanvasObject>)
-                    }
-                  >
-                    <Replace className="h-3.5 w-3.5" />
-                    Επεξεργασία διαδρομής
-                  </Button>
+                <div className="mb-3 space-y-1.5">
+                  <Label className="text-xs mb-1.5 block">Επεξεργασία διαδρομής</Label>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <Button
+                      variant={isCurvedNow ? "default" : "outline"}
+                      size="sm"
+                      className="text-xs gap-1.5"
+                      onClick={() =>
+                        isConnector
+                          ? onChange({ routeType: "curved", curved: true, bendPoints: [] } as unknown as Partial<CanvasObject>)
+                          : onChange({ lineKind: "curved", bendPoints: [] } as unknown as Partial<CanvasObject>)
+                      }
+                    >
+                      <Replace className="h-3.5 w-3.5" />
+                      Καμπυλωτή
+                    </Button>
+                    <Button
+                      variant={hasSegments ? "default" : "outline"}
+                      size="sm"
+                      className="text-xs gap-1.5"
+                      onClick={() => onSegmentPath?.()}
+                    >
+                      <Replace className="h-3.5 w-3.5" />
+                      Κομμάτια
+                    </Button>
+                  </div>
                   {isCurvedNow && (
-                    <p className="text-[10px] text-muted-foreground mt-1.5">
+                    <p className="text-[10px] text-muted-foreground">
                       Πιάσε το σημείο πάνω στη γραμμή και σύρε το για να την κυρτώσεις.
+                    </p>
+                  )}
+                  {hasSegments && (
+                    <p className="text-[10px] text-muted-foreground">
+                      Η γραμμή έσπασε σε κομμάτια — πιάσε κάθε σημείο και μετακίνησέ το ξεχωριστά.
                     </p>
                   )}
                 </div>
