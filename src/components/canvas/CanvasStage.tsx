@@ -2334,116 +2334,108 @@ export function CanvasStage({
         </g>
       </svg>
 
-      {/* Text formatting toolbar — shown when editing a shape or text object */}
+      {/* Text formatting toolbar — shown when editing a shape, text, or connector label */}
       {editingId &&
         primarySelected &&
-        (primarySelected.type === "shape" || primarySelected.type === "text" || primarySelected.type === "connector") && (
-          <div
-            className="absolute bottom-16 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1 rounded-lg border border-border bg-surface shadow-md px-2 py-1"
-            onPointerDown={(e) => e.stopPropagation()}
-          >
-            {primarySelected.type !== "connector" && (
-              <>
-                {/* Font size drag control */}
-                <div className="flex items-center gap-1 mr-1">
-                  <span className="text-[10px] text-muted-foreground select-none">A</span>
-                  <input
-                    type="range"
-                    min={8}
-                    max={72}
-                    step={1}
-                    value={(primarySelected as ShapeObject | TextObject).fontSize ?? 14}
-                    onChange={(e) =>
-                      updateObject(editingId, {
-                        fontSize: Number(e.target.value),
-                      } as Partial<CanvasObject>)
-                    }
-                    className="w-20 h-1.5 accent-primary cursor-pointer"
-                    title="Μέγεθος γραμματοσειράς"
-                  />
-                  <span className="text-[10px] text-muted-foreground select-none">A</span>
-                  <span className="text-xs tabular-nums w-6 text-center text-muted-foreground">
-                    {(primarySelected as ShapeObject | TextObject).fontSize ?? 14}
-                  </span>
-                </div>
-                <div className="w-px h-5 bg-border mx-0.5" />
-              </>
-            )}
-            <button
-              className={`h-7 px-2 rounded text-xs font-medium hover:bg-muted transition-colors ${(primarySelected.type === "connector" ? (primarySelected as ConnectorObject).labelStyle?.bold : (primarySelected as ShapeObject | TextObject).bold) ? "bg-primary text-primary-foreground" : "text-foreground"}`}
-              title="Έντονα (Bold)"
-              onClick={() =>
-                primarySelected.type === "connector"
-                  ? updateObject(editingId, { labelStyle: { ...(primarySelected as ConnectorObject).labelStyle, bold: !(primarySelected as ConnectorObject).labelStyle?.bold } } as Partial<CanvasObject>)
-                  : updateObject(editingId, { bold: !(primarySelected as ShapeObject | TextObject).bold } as Partial<CanvasObject>)
-              }
+        (primarySelected.type === "shape" || primarySelected.type === "text" || primarySelected.type === "connector") &&
+        (() => {
+          const isConn = primarySelected.type === "connector";
+          const co = primarySelected as ConnectorObject;
+          const so = primarySelected as ShapeObject | TextObject;
+          const curFontSize = isConn ? co.labelStyle?.fontSize ?? 11 : so.fontSize ?? 14;
+          const curBold = isConn ? !!co.labelStyle?.bold : !!so.bold;
+          const curItalic = isConn ? !!co.labelStyle?.italic : !!so.italic;
+          const curTransform = isConn ? co.labelStyle?.textTransform ?? "none" : so.textTransform ?? "none";
+          const patchLabelStyle = (patch: Partial<NonNullable<ConnectorObject["labelStyle"]>>) =>
+            updateObject(editingId, { labelStyle: { ...co.labelStyle, ...patch } } as Partial<CanvasObject>);
+          return (
+            <div
+              className="absolute bottom-16 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1 rounded-lg border border-border bg-surface shadow-md px-2 py-1"
+              onPointerDown={(e) => e.stopPropagation()}
             >
-              B
-            </button>
-            <button
-              className={`h-7 px-2 rounded text-xs italic hover:bg-muted transition-colors ${primarySelected.type === "connector" ? ((primarySelected as ConnectorObject).labelStyle?.italic ? "bg-primary text-primary-foreground" : "text-foreground") : ((primarySelected as ShapeObject | TextObject).italic ? "bg-primary text-primary-foreground" : "text-foreground")}`}
-              title="Πλάγια (Italic)"
-              onClick={() =>
-                primarySelected.type === "connector"
-                  ? updateObject(editingId, { labelStyle: { ...(primarySelected as ConnectorObject).labelStyle, italic: !(primarySelected as ConnectorObject).labelStyle?.italic } } as Partial<CanvasObject>)
-                  : updateObject(editingId, { italic: !(primarySelected as ShapeObject | TextObject).italic } as Partial<CanvasObject>)
-              }
-            >
-              I
-            </button>
-            <div className="w-px h-5 bg-border mx-0.5" />
-            {/* Text color swatches — moved here from the side panel so it's
-                right next to the text being edited. */}
-            <div className="flex items-center gap-1">
-              {MINI_SWATCHES.map((c) => (
-                <button
-                  key={c}
-                  title={c}
-                  onClick={() =>
-                    primarySelected.type === "connector"
-                      ? updateObject(editingId, { labelColor: c } as Partial<CanvasObject>)
-                      : updateObject(editingId, { textColor: c } as Partial<CanvasObject>)
+              {/* Font size drag control */}
+              <div className="flex items-center gap-1 mr-1">
+                <span className="text-[10px] text-muted-foreground select-none">A</span>
+                <input
+                  type="range"
+                  min={8}
+                  max={72}
+                  step={1}
+                  value={curFontSize}
+                  onChange={(e) =>
+                    isConn
+                      ? patchLabelStyle({ fontSize: Number(e.target.value) })
+                      : updateObject(editingId, { fontSize: Number(e.target.value) } as Partial<CanvasObject>)
                   }
-                  className="h-5 w-5 rounded-full border border-border shrink-0"
-                  style={{ backgroundColor: c }}
+                  className="w-20 h-1.5 accent-primary cursor-pointer"
+                  title="Μέγεθος γραμματοσειράς"
                 />
-              ))}
+                <span className="text-[10px] text-muted-foreground select-none">A</span>
+                <span className="text-xs tabular-nums w-6 text-center text-muted-foreground">{curFontSize}</span>
+              </div>
+              <div className="w-px h-5 bg-border mx-0.5" />
+              <button
+                className={`h-7 px-2 rounded text-xs font-medium hover:bg-muted transition-colors ${curBold ? "bg-primary text-primary-foreground" : "text-foreground"}`}
+                title="Έντονα (Bold)"
+                onClick={() =>
+                  isConn ? patchLabelStyle({ bold: !curBold }) : updateObject(editingId, { bold: !curBold } as Partial<CanvasObject>)
+                }
+              >
+                B
+              </button>
+              <button
+                className={`h-7 px-2 rounded text-xs italic hover:bg-muted transition-colors ${curItalic ? "bg-primary text-primary-foreground" : "text-foreground"}`}
+                title="Πλάγια (Italic)"
+                onClick={() =>
+                  isConn ? patchLabelStyle({ italic: !curItalic }) : updateObject(editingId, { italic: !curItalic } as Partial<CanvasObject>)
+                }
+              >
+                I
+              </button>
+              <div className="w-px h-5 bg-border mx-0.5" />
+              {/* Text color swatches — moved here from the side panel so it's
+                  right next to the text being edited. Only affects the text
+                  itself (shape/label color) — never the shape fill/border or
+                  the connector's own line+arrow color. */}
+              <div className="flex items-center gap-1">
+                {MINI_SWATCHES.map((c) => (
+                  <button
+                    key={c}
+                    title={c}
+                    onClick={() =>
+                      isConn
+                        ? updateObject(editingId, { labelColor: c } as Partial<CanvasObject>)
+                        : updateObject(editingId, { textColor: c } as Partial<CanvasObject>)
+                    }
+                    className="h-5 w-5 rounded-full border border-border shrink-0"
+                    style={{ backgroundColor: c }}
+                  />
+                ))}
+              </div>
+              <div className="w-px h-5 bg-border mx-0.5" />
+              <button
+                className={`h-7 px-2 rounded text-xs hover:bg-muted transition-colors ${curTransform === "capitalize" ? "bg-primary text-primary-foreground" : "text-foreground"}`}
+                title="Title Case"
+                onClick={() => {
+                  const next = curTransform === "capitalize" ? "none" : "capitalize";
+                  isConn ? patchLabelStyle({ textTransform: next }) : updateObject(editingId, { textTransform: next } as Partial<CanvasObject>);
+                }}
+              >
+                Tt
+              </button>
+              <button
+                className={`h-7 px-2 rounded text-xs hover:bg-muted transition-colors ${curTransform === "uppercase" ? "bg-primary text-primary-foreground" : "text-foreground"}`}
+                title="ΚΕΦΑΛΑΙΑ (ALL CAPS)"
+                onClick={() => {
+                  const next = curTransform === "uppercase" ? "none" : "uppercase";
+                  isConn ? patchLabelStyle({ textTransform: next }) : updateObject(editingId, { textTransform: next } as Partial<CanvasObject>);
+                }}
+              >
+                AA
+              </button>
             </div>
-            {primarySelected.type !== "connector" && (
-              <>
-                <div className="w-px h-5 bg-border mx-0.5" />
-                <button
-                  className={`h-7 px-2 rounded text-xs hover:bg-muted transition-colors ${(primarySelected as ShapeObject | TextObject).textTransform === "capitalize" ? "bg-primary text-primary-foreground" : "text-foreground"}`}
-                  title="Title Case"
-                  onClick={() =>
-                    updateObject(editingId, {
-                      textTransform:
-                        (primarySelected as ShapeObject | TextObject).textTransform === "capitalize"
-                          ? "none"
-                          : "capitalize",
-                    } as Partial<CanvasObject>)
-                  }
-                >
-                  Tt
-                </button>
-                <button
-                  className={`h-7 px-2 rounded text-xs hover:bg-muted transition-colors ${(primarySelected as ShapeObject | TextObject).textTransform === "uppercase" ? "bg-primary text-primary-foreground" : "text-foreground"}`}
-                  title="ΚΕΦΑΛΑΙΑ (ALL CAPS)"
-                  onClick={() =>
-                    updateObject(editingId, {
-                      textTransform:
-                        (primarySelected as ShapeObject | TextObject).textTransform === "uppercase"
-                          ? "none"
-                          : "uppercase",
-                    } as Partial<CanvasObject>)
-                  }
-                >
-                  AA
-                </button>
-              </>
-            )}
-          </div>
-        )}
+          );
+        })()}
 
       {primarySelected && (
         <PropertiesPanel
@@ -2473,6 +2465,30 @@ export function CanvasStage({
           onCopyStyle={copyStyle}
           onPasteStyle={pasteStyle}
           hasStyleClipboard={!!styleClipRef.current}
+          onSegmentPath={() => {
+            const obj = primarySelected;
+            if (!obj) return;
+            if (obj.type === "connector") {
+              const ep = resolveConnector(obj, byId);
+              if (!ep) return;
+              const { x1, y1, x2, y2 } = ep;
+              updateObject(obj.id, {
+                routeType: "straight",
+                curved: false,
+                bendPoints: [
+                  { x: x1 + (x2 - x1) / 3, y: y1 + (y2 - y1) / 3 },
+                  { x: x1 + (x2 - x1) * 2 / 3, y: y1 + (y2 - y1) * 2 / 3 },
+                ],
+              } as Partial<CanvasObject>);
+            } else if (obj.type === "line") {
+              updateObject(obj.id, {
+                bendPoints: [
+                  { x: obj.x1 + (obj.x2 - obj.x1) / 3, y: obj.y1 + (obj.y2 - obj.y1) / 3 },
+                  { x: obj.x1 + (obj.x2 - obj.x1) * 2 / 3, y: obj.y1 + (obj.y2 - obj.y1) * 2 / 3 },
+                ],
+              } as Partial<CanvasObject>);
+            }
+          }}
         />
       )}
 
@@ -2973,6 +2989,20 @@ function ObjectNode({
         : null;
     return (
       <g {...common} color={o.stroke ?? "#0F172A"}>
+        {(o.arrowEnd || o.arrowStart) && (
+          <defs>
+            {o.arrowEnd && (
+              <marker id={`arrow-end-${o.id}`} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z" fill={o.stroke ?? "#0F172A"} />
+              </marker>
+            )}
+            {o.arrowStart && (
+              <marker id={`arrow-start-${o.id}`} viewBox="0 0 10 10" refX="1" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                <path d="M 10 0 L 0 5 L 10 10 z" fill={o.stroke ?? "#0F172A"} />
+              </marker>
+            )}
+          </defs>
+        )}
         {polyD ? (
           <path
             d={polyD}
@@ -2980,8 +3010,8 @@ function ObjectNode({
             stroke={o.stroke ?? "#0F172A"}
             strokeWidth={o.strokeWidth ?? 2}
             strokeDasharray={dash}
-            markerEnd={o.arrowEnd ? "url(#ums-arrow-end)" : undefined}
-            markerStart={o.arrowStart ? "url(#ums-arrow-start)" : undefined}
+            markerEnd={o.arrowEnd ? `url(#arrow-end-${o.id})` : undefined}
+            markerStart={o.arrowStart ? `url(#arrow-start-${o.id})` : undefined}
           />
         ) : isCurved ? (
           <path
@@ -2990,8 +3020,8 @@ function ObjectNode({
             stroke={o.stroke ?? "#0F172A"}
             strokeWidth={o.strokeWidth ?? 2}
             strokeDasharray={dash}
-            markerEnd={o.arrowEnd ? "url(#ums-arrow-end)" : undefined}
-            markerStart={o.arrowStart ? "url(#ums-arrow-start)" : undefined}
+            markerEnd={o.arrowEnd ? `url(#arrow-end-${o.id})` : undefined}
+            markerStart={o.arrowStart ? `url(#arrow-start-${o.id})` : undefined}
           />
         ) : (
           <line
@@ -3002,8 +3032,8 @@ function ObjectNode({
             stroke={o.stroke ?? "#0F172A"}
             strokeWidth={o.strokeWidth ?? 2}
             strokeDasharray={dash}
-            markerEnd={o.arrowEnd ? "url(#ums-arrow-end)" : undefined}
-            markerStart={o.arrowStart ? "url(#ums-arrow-start)" : undefined}
+            markerEnd={o.arrowEnd ? `url(#arrow-end-${o.id})` : undefined}
+            markerStart={o.arrowStart ? `url(#arrow-start-${o.id})` : undefined}
           />
         )}
         {/* invisible hit area */}
@@ -3085,6 +3115,8 @@ function ObjectNode({
             ? autoRoutePath(x1, y1, x2, y2, obstacles)
             : connectorPath(route, x1, y1, x2, y2, o.sourceMagnet, o.targetMagnet, o.curveControl);
     const ls = o.labelStyle ?? { italic: true };
+    const arrowEndId = `arrow-end-${o.id}`;
+    const arrowStartId = `arrow-start-${o.id}`;
     return (
       <g
         {...common}
@@ -3101,6 +3133,20 @@ function ObjectNode({
           common.onPointerDown(e);
         }}
       >
+        {(o.arrowEnd || o.arrowStart) && (
+          <defs>
+            {o.arrowEnd && (
+              <marker id={arrowEndId} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z" fill={stroke} />
+              </marker>
+            )}
+            {o.arrowStart && (
+              <marker id={arrowStartId} viewBox="0 0 10 10" refX="1" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                <path d="M 10 0 L 0 5 L 10 10 z" fill={stroke} />
+              </marker>
+            )}
+          </defs>
+        )}
         <path
           d={d}
           fill="none"
@@ -3108,8 +3154,8 @@ function ObjectNode({
           strokeWidth={sw}
           strokeDasharray={dash}
           strokeLinecap={strokeLinecapC}
-          markerEnd={o.arrowEnd ? "url(#ums-arrow-end)" : undefined}
-          markerStart={o.arrowStart ? "url(#ums-arrow-start)" : undefined}
+          markerEnd={o.arrowEnd ? `url(#${arrowEndId})` : undefined}
+          markerStart={o.arrowStart ? `url(#${arrowStartId})` : undefined}
         />
         {o.tickMarks && (
           <path d={tickMarksAlong(x1, y1, x2, y2)} fill="none" stroke={stroke} strokeWidth={Math.max(1, sw * 0.75)} style={{ pointerEvents: "none" }} />
@@ -3117,7 +3163,7 @@ function ObjectNode({
         {/* hit area (wider, transparent) */}
         <path d={d} fill="none" stroke="transparent" strokeWidth={14} />
         {editing ? (
-          <foreignObject x={midX - 70} y={midY - 12} width={140} height={26}>
+          <foreignObject x={midX - 70} y={midY - (ls.fontSize ?? 11)} width={140} height={(ls.fontSize ?? 11) * 2 + 4}>
             <div
               contentEditable
               suppressContentEditableWarning
@@ -3134,8 +3180,10 @@ function ObjectNode({
                 border: "1.5px solid #3B82F6",
                 borderRadius: 4,
                 padding: "2px 6px",
-                fontSize: 11,
-                fontStyle: (o.labelStyle ?? { italic: true }).italic ? "italic" : "normal",
+                fontSize: ls.fontSize ?? 11,
+                fontStyle: ls.italic ? "italic" : "normal",
+                fontWeight: ls.bold ? 700 : 400,
+                textTransform: ls.textTransform ?? "none",
                 color: o.labelColor ?? stroke,
                 textAlign: "center",
                 outline: "none",
@@ -3147,20 +3195,21 @@ function ObjectNode({
         ) : o.label && (() => {
           const angle = (Math.atan2(y2 - y1, x2 - x1) * 180) / Math.PI;
           const rot = angle > 90 || angle < -90 ? angle + 180 : angle;
+          const fs = ls.fontSize ?? 11;
           return (
             <g transform={`translate(${midX} ${midY})`} style={{ pointerEvents: "none" }}>
               <g transform={`rotate(${rot})`}>
-                <rect x={-((o.label.length * 3.5) + 4)} y={-16} width={(o.label.length * 7) + 8} height={14} rx={3} fill="white" fillOpacity={0.85} />
+                <rect x={-((o.label.length * fs * 0.32) + 4)} y={-fs - 5} width={(o.label.length * fs * 0.64) + 8} height={fs + 3} rx={3} fill="white" fillOpacity={0.85} />
                 <text
                   x={0}
                   y={-5}
                   textAnchor="middle"
                   fill={o.labelColor ?? stroke}
-                  fontSize={11}
+                  fontSize={fs}
                   fontStyle={ls.italic ? "italic" : "normal"}
                   fontWeight={ls.bold ? 700 : 400}
                   textDecoration={ls.underline ? "underline" : undefined}
-                  style={{ userSelect: "none" }}
+                  style={{ userSelect: "none", textTransform: ls.textTransform ?? "none" }}
                 >
                   {o.label}
                 </text>
