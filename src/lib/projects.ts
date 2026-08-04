@@ -193,72 +193,50 @@ export function subscribeCollabParticipants(
   });
 }
 
-/** Called whenever ANY client notices (via real-time presence) that
- *  nobody currently has this collaborative project open. Safe to call
- *  repeatedly / from multiple clients — idempotent via collabFinalized
- *  and deterministic copy ids, and a no-op for anything that isn't an
- *  active, non-finalized collaborative project.
- *
- *  Distributes an independent personal draft copy to EVERY participant
- *  who ever joined (including the owner), then clears the collaboration
- *  so the lobby's "Συνεργατικό live" indicator stops showing it. */
-export async function finalizeCollabProjectIfEmpty(projectId: string): Promise<void> {
+/** Called when a collaborator explicitly clicks "Αποθήκευση στα Έργα μου"
+ *  — saves (or re-saves, if clicked again later) an independent personal
+ *  copy of the CURRENT board state, owned by just this one participant.
+ *  The collaborative project itself is untouched and stays open — nobody
+ *  else's access changes, and anyone can keep coming back to it (and
+ *  save their own updated copy again) at any time. Deliberately does
+ *  NOT touch collabParticipantIds or close anything down. */
+export async function saveMyCollabCopy(projectId: string, uid: string): Promise<string> {
   const project = await getProject(projectId);
-  if (!project) return;
-  if (project.projectType !== "collaborative") return;
-  if (project.collabFinalized) return;
-  const participants = project.collabParticipantIds ?? [];
-  if (participants.length === 0) return;
+  if (!project) throw new Error("Το συνεργατικό σχέδιο δεν βρέθηκε");
 
   const state = await mapStore.load(projectId);
   const dateLabel = new Date().toLocaleDateString("el-GR", { day: "2-digit", month: "2-digit", year: "numeric" });
   const title = `Συνεργασία — ${project.title} — ${dateLabel}`;
+  const copyId = `collabcopy_${projectId}_${uid}`;
 
-  for (const uid of participants) {
-    const copyId = `collabcopy_${projectId}_${uid}`;
-    try {
-      await cSetDoc(
-        doc(db(), "projects", copyId),
-        {
-          ownerId: uid,
-          title,
-          status: "draft",
-          projectType: "personal",
-          mode: "solo",
-          workspaceType: project.workspaceType ?? "free-drawing",
-          sourceMapId: null,
-          liveSessionId: null,
-          originLabel: `👥 Συνεργασία`,
-          sourceCollabProjectId: projectId,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-          copiedAt: serverTimestamp(),
-        },
-        { merge: true },
-      );
-      if (state) {
-        const sanitized = JSON.parse(JSON.stringify(state));
-        await cSetDoc(
-          doc(db(), "projects", copyId, "snapshots", "current"),
-          { payload: sanitized, schemaVersion: 1, isCurrent: true, savedAt: serverTimestamp() },
-          { merge: true },
-        );
-      }
-    } catch (e) {
-      console.warn(`finalizeCollabProjectIfEmpty: failed to copy for ${uid}`, e);
-      // Don't mark finalized if any copy failed — a later call (from
-      // whoever next notices the empty presence) will retry, skipping
-      // whatever already succeeded thanks to the deterministic id check
-      // above.
-      return;
-    }
+  await cSetDoc(
+    doc(db(), "projects", copyId),
+    {
+      ownerId: uid,
+      title,
+      status: "draft",
+      projectType: "personal",
+      mode: "solo",
+      workspaceType: project.workspaceType ?? "free-drawing",
+      sourceMapId: null,
+      liveSessionId: null,
+      originLabel: `👥 Συνεργασία`,
+      sourceCollabProjectId: projectId,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+      copiedAt: serverTimestamp(),
+    },
+    { merge: true },
+  );
+  if (state) {
+    const sanitized = JSON.parse(JSON.stringify(state));
+    await cSetDoc(
+      doc(db(), "projects", copyId, "snapshots", "current"),
+      { payload: sanitized, schemaVersion: 1, isCurrent: true, savedAt: serverTimestamp() },
+      { merge: true },
+    );
   }
-
-  await cUpdateDoc(doc(db(), "projects", projectId), {
-    collabParticipantIds: [],
-    collabFinalized: true,
-    updatedAt: serverTimestamp(),
-  });
+  return copyId;
 }
 
 export function subscribeMyCollabProjects(uid: string, cb: (projects: Project[]) => void): Unsubscribe {
