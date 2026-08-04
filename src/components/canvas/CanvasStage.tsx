@@ -1815,6 +1815,7 @@ export function CanvasStage({
                 selected={selectedIds.includes(o.id)}
                 interactive={tool === "select" && !readOnly}
                 showRelationshipValues={!!state.settings.showRelationshipValues}
+                showInfoBadges={!!state.settings.showInfoBadges}
                 onSelect={(additive) => {
                   if (connectorMode) {
                     handleConnectorClickOnObject(o.id);
@@ -2542,6 +2543,23 @@ export function CanvasStage({
         >
           ±1 / 0
         </Button>
+        <Button
+          variant={state.settings.showInfoBadges ? "default" : "ghost"}
+          size="icon"
+          className="h-8 w-8"
+          onClick={() =>
+            commit((s) => ({
+              ...s,
+              settings: {
+                ...s.settings,
+                showInfoBadges: !s.settings.showInfoBadges,
+              },
+            }))
+          }
+          title="Εμφάνιση σημειώσεων (i)"
+        >
+          <span className="text-xs font-bold italic">i</span>
+        </Button>
       </div>
     </div>
   );
@@ -2642,7 +2660,7 @@ function InfoBadge({
 
   return (
     <g
-      transform={`translate(${x - 10} ${y + 2})`}
+      transform={`translate(${x - 15} ${y + 5})`}
       style={{ cursor: "pointer" }}
       onPointerDown={(e) => {
         e.stopPropagation();
@@ -2650,7 +2668,7 @@ function InfoBadge({
       }}
     >
       {/* Badge circle */}
-      <circle cx={8} cy={8} r={8} fill={open ? "#1D4ED8" : "#3B82F6"} opacity={0.9} />
+      <circle cx={8} cy={8} r={8} fill={open ? "#1D4ED8" : "#3B82F6"} opacity={open ? 0.9 : 0.55} />
       <text
         x={8}
         y={8}
@@ -2720,6 +2738,7 @@ function ObjectNode({
   selected,
   interactive,
   showRelationshipValues,
+  showInfoBadges,
   onSelect,
   onMoveStart,
   onTextEdit,
@@ -2735,6 +2754,7 @@ function ObjectNode({
   selected: boolean;
   interactive: boolean;
   showRelationshipValues?: boolean;
+  showInfoBadges?: boolean;
   onSelect: (additive: boolean) => void;
   onMoveStart: (e: React.PointerEvent, additive: boolean) => void;
   onTextEdit: (text: string) => void;
@@ -2745,13 +2765,6 @@ function ObjectNode({
   onInfoClick?: () => void;
   obstacles?: Rect[];
 }) {
-  // Manual double-click detection for connectors — native onDoubleClick
-  // proved unreliable here (the pointerdown handler's stopPropagation for
-  // "connectors can't be dragged directly" seems to interfere with the
-  // browser's native dblclick synthesis in some browsers). Tracking our
-  // own last-pointerdown timestamp sidesteps that entirely.
-  const lastPointerDownRef = useRef(0);
-
   // keep selectedIdsRef updated whenever a node renders selected
   if (selected && !selectedIdsRef.current.includes(o.id)) {
     selectedIdsRef.current = [...selectedIdsRef.current, o.id];
@@ -2884,7 +2897,7 @@ function ObjectNode({
           </foreignObject>
         )}
         {selected && <SelectionRect {...bbox(o)} />}
-        {hasInfo(o) && onInfoClick && (
+        {showInfoBadges && hasInfo(o) && onInfoClick && (
           <InfoBadge
             x={o.x + o.width}
             y={o.y}
@@ -3075,7 +3088,7 @@ function ObjectNode({
             <circle cx={o.x2} cy={o.y2} r={4} fill="#3B82F6" />
           </>
         )}
-        {hasInfo(o) && onInfoClick && (
+        {showInfoBadges && hasInfo(o) && onInfoClick && (
           <InfoBadge
             x={Math.max(o.x1, o.x2)}
             y={Math.min(o.y1, o.y2)}
@@ -3121,16 +3134,9 @@ function ObjectNode({
       <g
         {...common}
         color={stroke}
-        onPointerDown={(e) => {
-          const now = Date.now();
-          const isDoubleClick = now - lastPointerDownRef.current < 400;
-          lastPointerDownRef.current = now;
-          if (isDoubleClick) {
-            e.stopPropagation();
-            onStartEdit?.();
-            return;
-          }
-          common.onPointerDown(e);
+        onDoubleClick={(e) => {
+          e.stopPropagation();
+          onStartEdit?.();
         }}
       >
         {(o.arrowEnd || o.arrowStart) && (
@@ -3226,7 +3232,7 @@ function ObjectNode({
             <circle cx={x2} cy={y2} r={4} fill="#3B82F6" />
           </>
         )}
-        {hasInfo(o) && onInfoClick && (
+        {showInfoBadges && hasInfo(o) && onInfoClick && (
           <InfoBadge
             x={Math.max(x1, x2)}
             y={Math.min(y1, y2)}
