@@ -151,7 +151,7 @@ function Editor() {
   // like a group — everyone else (an invite hasn't been accepted yet) is
   // read-only. Any other project (personal/etc): always editable, same as
   // before this feature existed.
-  const readOnly = project?.projectType === "collaborative" && !isCollabParticipant;
+  const readOnly = project?.projectType === "collaborative" && !isCollabParticipant && !isWorkspaceRoomBoard;
 
   // Mark myself as "currently here" in real-time presence while I'm a
   // participant on this collaborative project's page, and clear it (then
