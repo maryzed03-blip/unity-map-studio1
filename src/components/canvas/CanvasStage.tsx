@@ -506,7 +506,71 @@ function connectorPath(
   return `M ${x1} ${y1} L ${x1} ${midY} L ${x2} ${midY} L ${x2} ${y2}`;
 }
 
-// ── component ─────────────────────────────────────────────────────────
+// Compact palette for the inline (bottom, double-click) text-color toolbar —
+// used for shape/text textColor and connector labelColor alike.
+const MINI_SWATCHES = ["#0F172A", "#EF4444", "#F59E0B", "#22C55E", "#3B82F6", "#8B5CF6", "#FFFFFF"];
+
+// ── Relationship line style helpers (dashed/dotted/wavy/tick-marks) ────
+
+/** Straight-line sine wave between two points — used for the "Κυματιστές"
+ *  relationship style. Deliberately ignores the connector's routing type
+ *  (orthogonal/curved bends) and always draws directly between the two
+ *  resolved endpoints, matching the genogram convention of a simple wavy
+ *  line indicating a conflictual relationship. */
+function wavyPath(x1: number, y1: number, x2: number, y2: number): string {
+  const dx = x2 - x1, dy = y2 - y1;
+  const len = Math.hypot(dx, dy) || 1;
+  const ux = dx / len, uy = dy / len; // unit vector along the line
+  const px = -uy, py = ux; // perpendicular unit vector
+  const wavelength = 14;
+  const amplitude = 4;
+  const segments = Math.max(2, Math.round(len / wavelength));
+  let d = `M ${x1} ${y1}`;
+  for (let i = 0; i < segments; i++) {
+    const t0 = i / segments, t1 = (i + 0.5) / segments;
+    const sign = i % 2 === 0 ? 1 : -1;
+    const cx = x1 + dx * t1 + px * amplitude * sign;
+    const cy = y1 + dy * t1 + py * amplitude * sign;
+    const ex = x1 + dx * ((i + 1) / segments);
+    const ey = y1 + dy * ((i + 1) / segments);
+    d += ` Q ${cx} ${cy} ${ex} ${ey}`;
+  }
+  return d;
+}
+
+/** Short perpendicular tick marks evenly spaced along the direct line
+ *  between two points — the "Κάθετες" style (genogram "cutoff"
+ *  relationship convention). Returned as a single multi-segment path so
+ *  it can be stroked once alongside the main line. */
+function tickMarksAlong(x1: number, y1: number, x2: number, y2: number): string {
+  const dx = x2 - x1, dy = y2 - y1;
+  const len = Math.hypot(dx, dy) || 1;
+  const ux = dx / len, uy = dy / len;
+  const px = -uy, py = ux;
+  const half = 6;
+  const count = Math.max(1, Math.min(6, Math.round(len / 30)));
+  let d = "";
+  for (let i = 1; i <= count; i++) {
+    const t = i / (count + 1);
+    const cx = x1 + dx * t, cy = y1 + dy * t;
+    d += ` M ${cx - px * half} ${cy - py * half} L ${cx + px * half} ${cy + py * half}`;
+  }
+  return d;
+}
+
+/** Combines dashed + dotted into one dasharray when both are on — each
+ *  stays independently readable rather than one silently overriding the
+ *  other. Density (sparse/dense) scales the gaps. */
+function combinedDashArray(dashed: boolean, dotted: boolean, density: "sparse" | "dense" | undefined, sw: number): string | undefined {
+  if (!dashed && !dotted) return undefined;
+  const unit = Math.max(1.5, sw);
+  const gapMul = density === "sparse" ? 3.5 : density === "dense" ? 1.5 : 2.5;
+  if (dashed && dotted) return `${unit * 3} ${unit * gapMul} 0.1 ${unit * gapMul}`;
+  if (dashed) return `${unit * 3} ${unit * gapMul}`;
+  return `0.1 ${unit * gapMul}`; // dotted only
+}
+
+
 export function CanvasStage({
   mapId,
   tool,
@@ -2273,85 +2337,111 @@ export function CanvasStage({
       {/* Text formatting toolbar — shown when editing a shape or text object */}
       {editingId &&
         primarySelected &&
-        (primarySelected.type === "shape" || primarySelected.type === "text") && (
+        (primarySelected.type === "shape" || primarySelected.type === "text" || primarySelected.type === "connector") && (
           <div
             className="absolute bottom-16 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1 rounded-lg border border-border bg-surface shadow-md px-2 py-1"
             onPointerDown={(e) => e.stopPropagation()}
           >
-            {/* Font size drag control */}
-            <div className="flex items-center gap-1 mr-1">
-              <span className="text-[10px] text-muted-foreground select-none">A</span>
-              <input
-                type="range"
-                min={8}
-                max={72}
-                step={1}
-                value={(primarySelected as ShapeObject | TextObject).fontSize ?? 14}
-                onChange={(e) =>
-                  updateObject(editingId, {
-                    fontSize: Number(e.target.value),
-                  } as Partial<CanvasObject>)
-                }
-                className="w-20 h-1.5 accent-primary cursor-pointer"
-                title="Μέγεθος γραμματοσειράς"
-              />
-              <span className="text-[10px] text-muted-foreground select-none">A</span>
-              <span className="text-xs tabular-nums w-6 text-center text-muted-foreground">
-                {(primarySelected as ShapeObject | TextObject).fontSize ?? 14}
-              </span>
-            </div>
-            <div className="w-px h-5 bg-border mx-0.5" />
+            {primarySelected.type !== "connector" && (
+              <>
+                {/* Font size drag control */}
+                <div className="flex items-center gap-1 mr-1">
+                  <span className="text-[10px] text-muted-foreground select-none">A</span>
+                  <input
+                    type="range"
+                    min={8}
+                    max={72}
+                    step={1}
+                    value={(primarySelected as ShapeObject | TextObject).fontSize ?? 14}
+                    onChange={(e) =>
+                      updateObject(editingId, {
+                        fontSize: Number(e.target.value),
+                      } as Partial<CanvasObject>)
+                    }
+                    className="w-20 h-1.5 accent-primary cursor-pointer"
+                    title="Μέγεθος γραμματοσειράς"
+                  />
+                  <span className="text-[10px] text-muted-foreground select-none">A</span>
+                  <span className="text-xs tabular-nums w-6 text-center text-muted-foreground">
+                    {(primarySelected as ShapeObject | TextObject).fontSize ?? 14}
+                  </span>
+                </div>
+                <div className="w-px h-5 bg-border mx-0.5" />
+              </>
+            )}
             <button
-              className={`h-7 px-2 rounded text-xs font-medium hover:bg-muted transition-colors ${(primarySelected as ShapeObject | TextObject).bold ? "bg-primary text-primary-foreground" : "text-foreground"}`}
+              className={`h-7 px-2 rounded text-xs font-medium hover:bg-muted transition-colors ${(primarySelected.type === "connector" ? (primarySelected as ConnectorObject).labelStyle?.bold : (primarySelected as ShapeObject | TextObject).bold) ? "bg-primary text-primary-foreground" : "text-foreground"}`}
               title="Έντονα (Bold)"
               onClick={() =>
-                updateObject(editingId, {
-                  bold: !(primarySelected as ShapeObject | TextObject).bold,
-                } as Partial<CanvasObject>)
+                primarySelected.type === "connector"
+                  ? updateObject(editingId, { labelStyle: { ...(primarySelected as ConnectorObject).labelStyle, bold: !(primarySelected as ConnectorObject).labelStyle?.bold } } as Partial<CanvasObject>)
+                  : updateObject(editingId, { bold: !(primarySelected as ShapeObject | TextObject).bold } as Partial<CanvasObject>)
               }
             >
               B
             </button>
             <button
-              className={`h-7 px-2 rounded text-xs italic hover:bg-muted transition-colors ${(primarySelected as ShapeObject | TextObject).italic ? "bg-primary text-primary-foreground" : "text-foreground"}`}
+              className={`h-7 px-2 rounded text-xs italic hover:bg-muted transition-colors ${primarySelected.type === "connector" ? ((primarySelected as ConnectorObject).labelStyle?.italic ? "bg-primary text-primary-foreground" : "text-foreground") : ((primarySelected as ShapeObject | TextObject).italic ? "bg-primary text-primary-foreground" : "text-foreground")}`}
               title="Πλάγια (Italic)"
               onClick={() =>
-                updateObject(editingId, {
-                  italic: !(primarySelected as ShapeObject | TextObject).italic,
-                } as Partial<CanvasObject>)
+                primarySelected.type === "connector"
+                  ? updateObject(editingId, { labelStyle: { ...(primarySelected as ConnectorObject).labelStyle, italic: !(primarySelected as ConnectorObject).labelStyle?.italic } } as Partial<CanvasObject>)
+                  : updateObject(editingId, { italic: !(primarySelected as ShapeObject | TextObject).italic } as Partial<CanvasObject>)
               }
             >
               I
             </button>
             <div className="w-px h-5 bg-border mx-0.5" />
-            <button
-              className={`h-7 px-2 rounded text-xs hover:bg-muted transition-colors ${(primarySelected as ShapeObject | TextObject).textTransform === "capitalize" ? "bg-primary text-primary-foreground" : "text-foreground"}`}
-              title="Title Case"
-              onClick={() =>
-                updateObject(editingId, {
-                  textTransform:
-                    (primarySelected as ShapeObject | TextObject).textTransform === "capitalize"
-                      ? "none"
-                      : "capitalize",
-                } as Partial<CanvasObject>)
-              }
-            >
-              Tt
-            </button>
-            <button
-              className={`h-7 px-2 rounded text-xs hover:bg-muted transition-colors ${(primarySelected as ShapeObject | TextObject).textTransform === "uppercase" ? "bg-primary text-primary-foreground" : "text-foreground"}`}
-              title="ΚΕΦΑΛΑΙΑ (ALL CAPS)"
-              onClick={() =>
-                updateObject(editingId, {
-                  textTransform:
-                    (primarySelected as ShapeObject | TextObject).textTransform === "uppercase"
-                      ? "none"
-                      : "uppercase",
-                } as Partial<CanvasObject>)
-              }
-            >
-              AA
-            </button>
+            {/* Text color swatches — moved here from the side panel so it's
+                right next to the text being edited. */}
+            <div className="flex items-center gap-1">
+              {MINI_SWATCHES.map((c) => (
+                <button
+                  key={c}
+                  title={c}
+                  onClick={() =>
+                    primarySelected.type === "connector"
+                      ? updateObject(editingId, { labelColor: c } as Partial<CanvasObject>)
+                      : updateObject(editingId, { textColor: c } as Partial<CanvasObject>)
+                  }
+                  className="h-5 w-5 rounded-full border border-border shrink-0"
+                  style={{ backgroundColor: c }}
+                />
+              ))}
+            </div>
+            {primarySelected.type !== "connector" && (
+              <>
+                <div className="w-px h-5 bg-border mx-0.5" />
+                <button
+                  className={`h-7 px-2 rounded text-xs hover:bg-muted transition-colors ${(primarySelected as ShapeObject | TextObject).textTransform === "capitalize" ? "bg-primary text-primary-foreground" : "text-foreground"}`}
+                  title="Title Case"
+                  onClick={() =>
+                    updateObject(editingId, {
+                      textTransform:
+                        (primarySelected as ShapeObject | TextObject).textTransform === "capitalize"
+                          ? "none"
+                          : "capitalize",
+                    } as Partial<CanvasObject>)
+                  }
+                >
+                  Tt
+                </button>
+                <button
+                  className={`h-7 px-2 rounded text-xs hover:bg-muted transition-colors ${(primarySelected as ShapeObject | TextObject).textTransform === "uppercase" ? "bg-primary text-primary-foreground" : "text-foreground"}`}
+                  title="ΚΕΦΑΛΑΙΑ (ALL CAPS)"
+                  onClick={() =>
+                    updateObject(editingId, {
+                      textTransform:
+                        (primarySelected as ShapeObject | TextObject).textTransform === "uppercase"
+                          ? "none"
+                          : "uppercase",
+                    } as Partial<CanvasObject>)
+                  }
+                >
+                  AA
+                </button>
+              </>
+            )}
           </div>
         )}
 
@@ -2928,7 +3018,7 @@ function ObjectNode({
                   x={0}
                   y={-5}
                   textAnchor="middle"
-                  fill={o.stroke ?? "#0F172A"}
+                  fill={o.labelColor ?? o.stroke ?? "#0F172A"}
                   fontSize={11}
                   fontStyle="italic"
                   style={{ userSelect: "none" }}
@@ -2967,14 +3057,16 @@ function ObjectNode({
     const { x1, y1, x2, y2 } = ep;
     const midX = (x1 + x2) / 2,
       midY = (y1 + y2) / 2;
-    const dash = o.dashed ? "6 4" : undefined;
     const stroke = o.stroke ?? "#0F172A";
     const sw = o.strokeWidth ?? 2;
+    const dash = combinedDashArray(!!o.dashed, !!o.dotted, o.dashDensity, sw);
+    const strokeLinecapC: "round" | undefined = o.dotted ? "round" : undefined;
     const route = effectiveRoute(o);
     const intensity = o.lightningIntensity ?? 4;
     const polyPts = buildPolyPoints({ x: x1, y: y1 }, { x: x2, y: y2 }, o.bendPoints);
-    const d =
-      o.connectorStyle === "lightning"
+    const d = o.wavy
+      ? wavyPath(x1, y1, x2, y2)
+      : o.connectorStyle === "lightning"
         ? route === "zigzag"
           ? autoRoutePath(x1, y1, x2, y2, obstacles) // auto-route then lightning overlay not applicable; use auto path directly
           : lightningPath(polyPts, intensity)
@@ -2987,19 +3079,51 @@ function ObjectNode({
             : connectorPath(route, x1, y1, x2, y2, o.sourceMagnet, o.targetMagnet, o.curveControl);
     const ls = o.labelStyle ?? { italic: true };
     return (
-      <g {...common} color={stroke}>
+      <g {...common} color={stroke} onDoubleClick={(e) => { e.stopPropagation(); onStartEdit?.(); }}>
         <path
           d={d}
           fill="none"
           stroke={stroke}
           strokeWidth={sw}
           strokeDasharray={dash}
+          strokeLinecap={strokeLinecapC}
           markerEnd={o.arrowEnd ? "url(#ums-arrow-end)" : undefined}
           markerStart={o.arrowStart ? "url(#ums-arrow-start)" : undefined}
         />
+        {o.tickMarks && (
+          <path d={tickMarksAlong(x1, y1, x2, y2)} fill="none" stroke={stroke} strokeWidth={Math.max(1, sw * 0.75)} style={{ pointerEvents: "none" }} />
+        )}
         {/* hit area (wider, transparent) */}
         <path d={d} fill="none" stroke="transparent" strokeWidth={14} />
-        {o.label && (() => {
+        {editing ? (
+          <foreignObject x={midX - 70} y={midY - 12} width={140} height={26}>
+            <div
+              contentEditable
+              suppressContentEditableWarning
+              autoFocus
+              onBlur={(e) => onTextEdit(e.currentTarget.textContent ?? "")}
+              onPointerDown={(e) => e.stopPropagation()}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") { e.preventDefault(); (e.currentTarget as HTMLElement).blur(); }
+              }}
+              style={{
+                width: "100%",
+                minHeight: "100%",
+                background: "white",
+                border: "1.5px solid #3B82F6",
+                borderRadius: 4,
+                padding: "2px 6px",
+                fontSize: 11,
+                fontStyle: (o.labelStyle ?? { italic: true }).italic ? "italic" : "normal",
+                color: o.labelColor ?? stroke,
+                textAlign: "center",
+                outline: "none",
+              }}
+            >
+              {o.label ?? ""}
+            </div>
+          </foreignObject>
+        ) : o.label && (() => {
           const angle = (Math.atan2(y2 - y1, x2 - x1) * 180) / Math.PI;
           const rot = angle > 90 || angle < -90 ? angle + 180 : angle;
           return (
@@ -3010,7 +3134,7 @@ function ObjectNode({
                   x={0}
                   y={-5}
                   textAnchor="middle"
-                  fill={stroke}
+                  fill={o.labelColor ?? stroke}
                   fontSize={11}
                   fontStyle={ls.italic ? "italic" : "normal"}
                   fontWeight={ls.bold ? 700 : 400}
@@ -3196,7 +3320,7 @@ function renderShape(o: ShapeObject, fill: string, stroke: string, sw: number) {
       id={patternId}
       kind={o.fillTexture as FillTextureKind}
       density={o.fillTextureDensity}
-      color={stroke}
+      color={o.fillTextureColor ?? stroke}
       opacity={(o.fillTextureOpacity ?? 100) / 100}
     />
   ) : null;
