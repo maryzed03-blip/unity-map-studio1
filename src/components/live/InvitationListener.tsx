@@ -36,6 +36,8 @@ function addDismissed(uid: string, invId: string) {
   } catch { /**/ }
 }
 
+const STALE_MS = 15 * 60 * 1000; // 15 minutes
+
 export function InvitationListener() {
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -54,6 +56,15 @@ export function InvitationListener() {
         if (shownRef.current.has(inv.id)) continue;
         shownRef.current.add(inv.id);
         addDismissed(user.uid, inv.id); // persist immediately
+
+        // Stale (e.g. a session that started/paused/invited long ago and
+        // was never acted on) — clean it up quietly instead of dumping a
+        // wall of irrelevant toasts on the next login.
+        const createdMs = (inv.createdAt as { toMillis?: () => number } | undefined)?.toMillis?.() ?? 0;
+        if (createdMs > 0 && Date.now() - createdMs > STALE_MS) {
+          deleteInvitation(inv.id).catch(() => {});
+          continue;
+        }
 
         const type = (inv as { type?: string }).type;
         const lessonTitle = (inv as { title?: string }).title ?? inv.fromUserName;
