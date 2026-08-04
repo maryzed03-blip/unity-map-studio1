@@ -60,6 +60,20 @@ export type ShapeKind =
   | "diamond"
   | "polygon";
 
+export type FillTextureKind =
+  | "none"
+  | "diagonal"
+  | "horizontal"
+  | "vertical"
+  | "cross"
+  | "dots"
+  | "grid"
+  | "wave";
+
+export type PatternDensity = "sparse" | "medium" | "dense";
+
+export type BorderStyle = "solid" | "dashed" | "dotted" | "dash-dot" | "none";
+
 export interface ShapeObject extends BaseObject {
   type: "shape";
   shapeKind: ShapeKind;
@@ -69,6 +83,19 @@ export interface ShapeObject extends BaseObject {
   bold?: boolean;
   italic?: boolean;
   textTransform?: "none" | "uppercase" | "capitalize";
+  /** Fill opacity (0–100), independent of the shape's overall opacity. */
+  fillOpacity?: number;
+  fillTexture?: FillTextureKind;
+  /** Only meaningful when fillTexture !== "none". */
+  fillTextureDensity?: PatternDensity;
+  /** Independent of fillOpacity — lets the texture pattern be lighter/darker
+   *  than the base fill color underneath it. */
+  fillTextureOpacity?: number;
+  borderStyle?: BorderStyle;
+  /** Only meaningful when borderStyle is dashed/dotted/dash-dot. */
+  borderDashDensity?: PatternDensity;
+  /** Border opacity (0–100), independent of fill/overall opacity. */
+  borderOpacity?: number;
 }
 
 /** Optional bend points (Stage 6) for poly-line / poly-connector rendering.
