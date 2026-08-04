@@ -2,6 +2,7 @@ import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAuth } from "@/lib/auth-context";
 import { ClientOnly } from "@/lib/client-only";
+import { QuotaWarningSurface } from "@/components/QuotaWarningSurface";
 import { Button } from "@/components/ui/button";
 import {
   ArrowLeft,
@@ -31,8 +32,8 @@ import { mapStore } from "@/lib/canvas/storage";
 import { AIPanel } from "@/components/ai/AIPanel";
 import type { CanvasObject } from "@/lib/canvas/types";
 import { subscribeActiveSession, subscribeGroupRooms, type LiveSession, type GroupRoom } from "@/lib/live-sessions";
-import { getProject, createProjectFromObjects, subscribeCollabParticipants, finalizeCollabProjectIfEmpty, type Project } from "@/lib/projects";
-import { subscribePresence, setCurrentCollabProject, type PresenceMap } from "@/lib/presence";
+import { getProject, createProjectFromObjects, subscribeCollabParticipants, saveMyCollabCopy, type Project } from "@/lib/projects";
+import { setCurrentCollabProject } from "@/lib/presence";
 import { insertObjectsIntoBoard } from "@/lib/canvas/insert-into-board";
 import { SelectionActionsBar, type SendTarget } from "@/components/canvas/SelectionActionsBar";
 
@@ -154,32 +155,33 @@ function Editor() {
   const readOnly = project?.projectType === "collaborative" && !isCollabParticipant && !isWorkspaceRoomBoard;
 
   // Mark myself as "currently here" in real-time presence while I'm a
-  // participant on this collaborative project's page, and clear it (then
-  // check if I was the last one) the moment I leave — covers normal
-  // navigation-away/tab-close-with-cleanup. An abrupt crash/kill relies
-  // on RTDB's onDisconnect to clear presence server-side; the actual
-  // finalize call in that edge case only fires the next time someone
-  // else's client happens to check (accepted trade-off, not a security
-  // or data-loss issue — the collaboration just stays "live" a bit
-  // longer than strictly necessary).
+  // participant on this collaborative project's page — purely so the
+  // lobby's "Συνεργατικό σχέδιο live" button can tell someone else is
+  // in there right now. The collaboration itself never auto-closes:
+  // people may come back to keep working on it at any time, and anyone
+  // can save their own personal snapshot of it whenever they like (see
+  // the "Αποθήκευση στα Έργα μου" button below) without affecting
+  // anyone else's access to the shared original.
   useEffect(() => {
     if (!isCollabParticipant) return;
     setCurrentCollabProject(projectId);
-    return () => {
-      setCurrentCollabProject(null);
-      // Give the presence write above a moment to land before checking
-      // who else is still here.
-      setTimeout(() => {
-        const unsub = subscribePresence((map: PresenceMap) => {
-          unsub();
-          const stillHere = Object.values(map).some(
-            (p) => p.state === "online" && p.currentCollabProjectId === projectId,
-          );
-          if (!stillHere) finalizeCollabProjectIfEmpty(projectId).catch(() => {});
-        });
-      }, 300);
-    };
+    return () => setCurrentCollabProject(null);
   }, [isCollabParticipant, projectId]);
+
+  const [savingCollabCopy, setSavingCollabCopy] = useState(false);
+  const handleSaveMyCollabCopy = async () => {
+    if (!user) return;
+    setSavingCollabCopy(true);
+    try {
+      await saveApiRef.current?.save().catch(() => {});
+      await saveMyCollabCopy(projectId, user.uid);
+      toast.success("Αποθηκεύτηκε στα Έργα μου");
+    } catch {
+      toast.error("Αποτυχία αποθήκευσης");
+    } finally {
+      setSavingCollabCopy(false);
+    }
+  };
 
   // ── Selection actions bar (send to live lesson / new project) ──────
   const [selectedObjects, setSelectedObjects] = useState<CanvasObject[]>([]);
@@ -306,6 +308,18 @@ function Editor() {
               mapId={projectId}
               onInsert={(objs) => saveApiRef.current?.appendObjects(objs)}
             />
+          )}
+          {isCollabParticipant && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              disabled={savingCollabCopy}
+              onClick={handleSaveMyCollabCopy}
+            >
+              {savingCollabCopy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+              Αποθήκευση στα Έργα μου
+            </Button>
           )}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -469,6 +483,7 @@ function Editor() {
         </div>
         </div>
       </div>
+      <QuotaWarningSurface />
     </div>
   );
 }
