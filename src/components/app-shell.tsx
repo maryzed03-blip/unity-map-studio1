@@ -93,6 +93,12 @@ function teacherNav(): NavItem[] {
     },
     {
       to: "/lobby",
+      search: { tab: "collab" },
+      label: "Συνεργατικά",
+      icon: <Users className="h-4 w-4" />,
+    },
+    {
+      to: "/lobby",
       search: { tab: "rooms" },
       label: "Χώροι Εργασίας",
       icon: <Map className="h-4 w-4" />,
