@@ -75,6 +75,10 @@ export function GlobalTabBar({ currentMapId, onTabSwitch }: Props) {
       const newActive = tabStore.getActive();
       const newTab = remaining.find((t) => t.id === newActive);
       if (newTab) handleSwitch(newActive);
+    } else {
+      // No tabs left at all — don't leave the just-closed project's page
+      // sitting open with nothing to switch back to.
+      navigate({ to: "/lobby" });
     }
   };
 
