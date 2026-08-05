@@ -879,7 +879,7 @@ export function CanvasStage({
     const textH = div.scrollHeight;
     document.body.removeChild(div);
     const minH = textH + pad * 2 + 8;
-    if (obj.height < minH) {
+    if (obj.height !== minH) {
       updateObject(editingId, { height: minH } as Partial<CanvasObject>);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2765,6 +2765,11 @@ function ObjectNode({
   onInfoClick?: () => void;
   obstacles?: Rect[];
 }) {
+  // Used only by connectors' onClick-based double-click detection (see
+  // below) — click, not pointerdown, so it never interferes with the
+  // existing select/drag handling.
+  const lastClickRef = useRef(0);
+
   // keep selectedIdsRef updated whenever a node renders selected
   if (selected && !selectedIdsRef.current.includes(o.id)) {
     selectedIdsRef.current = [...selectedIdsRef.current, o.id];
@@ -3000,6 +3005,17 @@ function ObjectNode({
           ? smoothPath(buildPolyPoints({ x: o.x1, y: o.y1 }, { x: o.x2, y: o.y2 }, o.bendPoints))
           : polylinePath(buildPolyPoints({ x: o.x1, y: o.y1 }, { x: o.x2, y: o.y2 }, o.bendPoints))
         : null;
+    // Where the label/info-badge sit — follows the actual path.
+    let labelX = midX, labelY = midY;
+    if (o.bendPoints && o.bendPoints.length > 0) {
+      const pts = buildPolyPoints({ x: o.x1, y: o.y1 }, { x: o.x2, y: o.y2 }, o.bendPoints);
+      const midIdx = Math.floor(pts.length / 2);
+      labelX = pts[midIdx].x;
+      labelY = pts[midIdx].y;
+    } else if (isCurved) {
+      labelX = (o.x1 + 2 * ctrlX + o.x2) / 4;
+      labelY = (o.y1 + 2 * ctrlY + o.y2) / 4;
+    }
     return (
       <g {...common} color={o.stroke ?? "#0F172A"}>
         {(o.arrowEnd || o.arrowStart) && (
@@ -3061,7 +3077,7 @@ function ObjectNode({
           // Keep text readable — flip if line goes right-to-left
           const rot = angle > 90 || angle < -90 ? angle + 180 : angle;
           return (
-            <g transform={`translate(${midX} ${midY})`} style={{ pointerEvents: "none" }}>
+            <g transform={`translate(${labelX} ${labelY})`} style={{ pointerEvents: "none" }}>
               <g transform={`rotate(${rot})`}>
                 <rect x={-((o.label.length * 3.5) + 4)} y={-7} width={(o.label.length * 7) + 8} height={14} rx={3} fill="white" fillOpacity={0.85} />
                 <text
@@ -3090,8 +3106,8 @@ function ObjectNode({
         )}
         {showInfoBadges && hasInfo(o) && onInfoClick && (
           <InfoBadge
-            x={midX + 6}
-            y={midY - 6}
+            x={labelX + 6}
+            y={labelY - 6}
             notes={o.notes}
             label={o.label}
             relationshipValue={o.relationshipValue}
@@ -3114,6 +3130,36 @@ function ObjectNode({
     const route = effectiveRoute(o);
     const intensity = o.lightningIntensity ?? 4;
     const polyPts = buildPolyPoints({ x: x1, y: y1 }, { x: x2, y: y2 }, o.bendPoints);
+    // Where the label/info-badge sit — follows the ACTUAL path, not just
+    // the straight-line midpoint between endpoints (which would leave the
+    // label floating off to the side once the line is curved or broken
+    // into segments).
+    let labelX = midX, labelY = midY;
+    if (o.bendPoints && o.bendPoints.length > 0) {
+      const midIdx = Math.floor(polyPts.length / 2);
+      labelX = polyPts[midIdx].x;
+      labelY = polyPts[midIdx].y;
+    } else if (route === "curved" && !o.wavy) {
+      let ctrlX: number, ctrlY: number;
+      if (o.curveControl) {
+        ctrlX = o.curveControl.x;
+        ctrlY = o.curveControl.y;
+      } else {
+        const dx = x2 - x1, dy = y2 - y1;
+        const len = Math.hypot(dx, dy) || 1;
+        const off = Math.min(60, len * 0.25);
+        ctrlX = midX - (dy / len) * off;
+        ctrlY = midY + (dx / len) * off;
+      }
+      // Point at t=0.5 on the quadratic bezier through (x1,y1) ctrl (x2,y2).
+      labelX = (x1 + 2 * ctrlX + x2) / 4;
+      labelY = (y1 + 2 * ctrlY + y2) / 4;
+    } else if (o.wavy) {
+      // wavyPath bows perpendicular from the straight line at its midpoint
+      // on odd-numbered segments — close enough to just nudge slightly.
+      labelX = midX;
+      labelY = midY;
+    }
     const d = o.wavy
       ? wavyPath(x1, y1, x2, y2)
       : o.connectorStyle === "lightning"
@@ -3134,9 +3180,13 @@ function ObjectNode({
       <g
         {...common}
         color={stroke}
-        onDoubleClick={(e) => {
-          e.stopPropagation();
-          onStartEdit?.();
+        onClick={(e) => {
+          const now = Date.now();
+          if (now - lastClickRef.current < 400) {
+            e.stopPropagation();
+            onStartEdit?.();
+          }
+          lastClickRef.current = now;
         }}
       >
         {(o.arrowEnd || o.arrowStart) && (
@@ -3169,7 +3219,7 @@ function ObjectNode({
         {/* hit area (wider, transparent) */}
         <path d={d} fill="none" stroke="transparent" strokeWidth={14} />
         {editing ? (
-          <foreignObject x={midX - 70} y={midY - (ls.fontSize ?? 11) / 2 - 2} width={140} height={(ls.fontSize ?? 11) + 4}>
+          <foreignObject x={labelX - 70} y={labelY - (ls.fontSize ?? 11) / 2 - 2} width={140} height={(ls.fontSize ?? 11) + 4}>
             <div
               contentEditable
               suppressContentEditableWarning
@@ -3203,7 +3253,7 @@ function ObjectNode({
           const rot = angle > 90 || angle < -90 ? angle + 180 : angle;
           const fs = ls.fontSize ?? 11;
           return (
-            <g transform={`translate(${midX} ${midY})`} style={{ pointerEvents: "none" }}>
+            <g transform={`translate(${labelX} ${labelY})`} style={{ pointerEvents: "none" }}>
               <g transform={`rotate(${rot})`}>
                 <rect x={-((o.label.length * fs * 0.32) + 4)} y={-(fs + 3) / 2} width={(o.label.length * fs * 0.64) + 8} height={fs + 3} rx={3} fill="white" fillOpacity={0.85} />
                 <text
@@ -3234,8 +3284,8 @@ function ObjectNode({
         )}
         {showInfoBadges && hasInfo(o) && onInfoClick && (
           <InfoBadge
-            x={midX + 6}
-            y={midY - 6}
+            x={labelX + 6}
+            y={labelY - 6}
             notes={o.notes}
             label={o.label}
             relationshipValue={o.relationshipValue}
