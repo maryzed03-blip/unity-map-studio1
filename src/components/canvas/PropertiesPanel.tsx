@@ -192,7 +192,7 @@ export function PropertiesPanel({
       )}
 
       {!multi && isShape && "shapeKind" in object && (
-        <CollapsibleSection title="Μορφή σχήματος">
+        <CollapsibleSection title="Μορφή σχήματος" defaultOpen={false}>
           <p className="text-[10px] text-muted-foreground -mt-1">
             Η μορφοποίηση (χρώμα, μέγεθος, κείμενο) διατηρείται.
           </p>
@@ -256,7 +256,7 @@ export function PropertiesPanel({
             </div>
           </CollapsibleSection>
 
-          <CollapsibleSection title="Κατεύθυνση συσχέτισης">
+          <CollapsibleSection title="Κατεύθυνση συσχέτισης" defaultOpen={false}>
             <div className="grid grid-cols-2 gap-1.5">
               <ToggleBtn
                 active={!!(object as { arrowStart?: boolean }).arrowStart}
@@ -306,7 +306,7 @@ export function PropertiesPanel({
               const intensity = co.lightningIntensity ?? 4;
               const hasDashLike = !!co.dashed || !!co.dotted;
               return (
-                <CollapsibleSection title="Ποιότητα σχέσης">
+                <CollapsibleSection title="Ποιότητα σχέσης" defaultOpen={false}>
                   <div className="grid grid-cols-2 gap-1.5">
                     <ToggleBtn active={cs === "line"} onClick={() => onChange({ connectorStyle: "line" } as Partial<CanvasObject>)}>
                       Απλή
@@ -505,7 +505,7 @@ export function PropertiesPanel({
             const color =
               cur > 0 ? "text-green-600" : cur < 0 ? "text-red-600" : "text-muted-foreground";
             return (
-              <CollapsibleSection title="Συντελεστής επίδρασης">
+              <CollapsibleSection title="Συντελεστής επίδρασης" defaultOpen={false}>
                 <div className="flex items-center justify-between mb-1.5">
                   <Label className="text-xs">Συντελεστής επίδρασης</Label>
                   <span className={`text-xs font-semibold tabular-nums ${color}`}>{label}</span>
@@ -540,7 +540,7 @@ export function PropertiesPanel({
           onChange={(c) => onChange({ fill: c })}
         />
       )}
-      {!isShape && (
+      {!isShape && !isConnector && (
         <SwatchRow
           label={isRelation ? "Χρώμα γραμμής" : isDrawing ? "Χρώμα μολυβιού" : "Περίγραμμα"}
           value={object.stroke ?? "#0F172A"}
@@ -550,7 +550,7 @@ export function PropertiesPanel({
         />
       )}
 
-      {!isShape && (
+      {!isShape && !isConnector && (
         <SliderRow
           label={isRelation || isDrawing ? "Πάχος γραμμής" : "Πάχος περιγράμματος"}
           value={object.strokeWidth ?? 1}
@@ -560,7 +560,7 @@ export function PropertiesPanel({
           onChange={(v) => onChange({ strokeWidth: v })}
         />
       )}
-      {!isShape && (
+      {!isShape && !isConnector && (
         <SliderRow
           label="Αδιαφάνεια"
           value={Math.round((object.opacity ?? 1) * 100)}
@@ -584,7 +584,7 @@ export function PropertiesPanel({
         const maxBorder = Math.max(so.width, so.height) > 300 ? 24 : 12;
         return (
           <>
-            <CollapsibleSection title="Γέμισμα">
+            <CollapsibleSection title="Γέμισμα" defaultOpen={false}>
               <SwatchRow label="Χρώμα γεμίσματος" value={so.fill ?? "#FFFFFF"} onChange={(c) => onChange({ fill: c })} />
               <SliderRow
                 label="Διαφάνεια χρώματος"
@@ -651,7 +651,7 @@ export function PropertiesPanel({
               )}
             </CollapsibleSection>
 
-            <CollapsibleSection title="Περίγραμμα">
+            <CollapsibleSection title="Περίγραμμα" defaultOpen={false}>
               <SwatchRow label="Χρώμα περιγράμματος" value={so.stroke ?? "#0F172A"} onChange={(c) => onChange({ stroke: c })} />
               <div>
                 <Label className="text-xs mb-1.5 block">Τύπος περιγράμματος</Label>
@@ -709,7 +709,7 @@ export function PropertiesPanel({
               />
             </CollapsibleSection>
 
-            <CollapsibleSection title="Συνολική εμφάνιση">
+            <CollapsibleSection title="Συνολική εμφάνιση" defaultOpen={false}>
               <SliderRow
                 label="Συνολική διαφάνεια σχήματος"
                 value={Math.round((so.opacity ?? 1) * 100)}
