@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
@@ -910,6 +911,12 @@ function ToggleBtn({
   );
 }
 
+// Remembers each section's open/closed state across deselect→reselect
+// cycles — the whole panel unmounts when nothing is selected, so plain
+// component state would otherwise reset back to defaultOpen every time.
+// Resets naturally on a full page reload, which is fine.
+const sectionOpenCache = new Map<string, boolean>();
+
 function CollapsibleSection({
   title,
   defaultOpen = true,
@@ -919,8 +926,17 @@ function CollapsibleSection({
   defaultOpen?: boolean;
   children: React.ReactNode;
 }) {
+  const [open, setOpen] = useState(() => sectionOpenCache.get(title) ?? defaultOpen);
   return (
-    <details className="group mb-3 border border-border rounded-lg overflow-hidden" open={defaultOpen}>
+    <details
+      className="group mb-3 border border-border rounded-lg overflow-hidden"
+      open={open}
+      onToggle={(e) => {
+        const next = (e.currentTarget as HTMLDetailsElement).open;
+        sectionOpenCache.set(title, next);
+        setOpen(next);
+      }}
+    >
       <summary className="flex items-center justify-between px-3 py-2 cursor-pointer select-none bg-muted/50 hover:bg-muted text-xs font-semibold uppercase tracking-wide text-muted-foreground [&::-webkit-details-marker]:hidden">
         {title}
         <ChevronDown className="h-3.5 w-3.5 transition-transform group-open:rotate-180" />
