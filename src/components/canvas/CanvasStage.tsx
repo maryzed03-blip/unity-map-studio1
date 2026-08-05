@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ZoomIn, ZoomOut, Undo2, Redo2, Maximize2 } from "lucide-react";
+import { ZoomIn, ZoomOut, Undo2, Redo2, Maximize2, Tag } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { PropertiesPanel } from "./PropertiesPanel";
 import { SymbolGlyph } from "./SymbolGlyph";
@@ -1816,6 +1816,7 @@ export function CanvasStage({
                 interactive={tool === "select" && !readOnly}
                 showRelationshipValues={!!state.settings.showRelationshipValues}
                 showInfoBadges={!!state.settings.showInfoBadges}
+                showRelationshipLabels={state.settings.showRelationshipLabels !== false}
                 onSelect={(additive) => {
                   if (connectorMode) {
                     handleConnectorClickOnObject(o.id);
@@ -2560,6 +2561,23 @@ export function CanvasStage({
         >
           <span className="text-xs font-bold italic">i</span>
         </Button>
+        <Button
+          variant={state.settings.showRelationshipLabels !== false ? "default" : "ghost"}
+          size="icon"
+          className="h-8 w-8"
+          onClick={() =>
+            commit((s) => ({
+              ...s,
+              settings: {
+                ...s.settings,
+                showRelationshipLabels: s.settings.showRelationshipLabels === false ? true : false,
+              },
+            }))
+          }
+          title="Εμφάνιση ετικετών σχέσεων"
+        >
+          <Tag className="h-4 w-4" />
+        </Button>
       </div>
     </div>
   );
@@ -2634,14 +2652,18 @@ function InfoBadge({
   notes,
   label,
   relationshipValue,
+  color,
 }: {
   x: number;
   y: number;
   notes?: string;
   label?: string;
   relationshipValue?: number;
+  /** Matches the badge to the object's own color instead of a fixed blue. */
+  color?: string;
 }) {
   const [open, setOpen] = React.useState(false);
+  const badgeColor = color ?? "#3B82F6";
 
   // Build tooltip lines
   const lines: string[] = [];
@@ -2650,10 +2672,17 @@ function InfoBadge({
   if (relationshipValue !== undefined && relationshipValue !== 0)
     lines.push(`Τιμή: ${relationshipValue > 0 ? "+" : ""}${relationshipValue}`);
 
-  const TOOLTIP_W = 180;
+  const TOOLTIP_W = 200;
   const TOOLTIP_PAD = 8;
-  const LINE_H = 16;
-  const tooltipH = lines.length * LINE_H + TOOLTIP_PAD * 2;
+  const LINE_H = 15;
+  // Rough wrapped-line estimate (foreignObject can't auto-size a parent
+  // SVG rect, so we estimate ~2px/char at 11px font in the available width).
+  const charsPerLine = Math.max(10, Math.floor((TOOLTIP_W - TOOLTIP_PAD * 2) / 5.7));
+  const wrappedLineCount = lines.reduce(
+    (sum, line) => sum + Math.max(1, Math.ceil(line.length / charsPerLine)),
+    0,
+  );
+  const tooltipH = wrappedLineCount * LINE_H + TOOLTIP_PAD * 2;
   // Position tooltip to the right of the badge; clamp handled by SVG overflow
   const tooltipX = 20;
   const tooltipY = -tooltipH / 2 + 8;
@@ -2668,7 +2697,7 @@ function InfoBadge({
       }}
     >
       {/* Badge circle */}
-      <circle cx={8} cy={8} r={8} fill={open ? "#1D4ED8" : "#3B82F6"} opacity={open ? 0.9 : 0.55} />
+      <circle cx={8} cy={8} r={8} fill={badgeColor} opacity={open ? 0.95 : 0.55} />
       <text
         x={8}
         y={8}
@@ -2712,19 +2741,22 @@ function InfoBadge({
             stroke="#E2E8F0"
             strokeWidth={1}
           />
-          {/* Lines of text */}
-          {lines.map((line, i) => (
-            <text
-              key={i}
-              x={TOOLTIP_PAD}
-              y={TOOLTIP_PAD + i * LINE_H + 11}
-              fontSize={11}
-              fill="#1E293B"
-              style={{ userSelect: "none" }}
+          {/* Full, wrapped text — nothing truncated */}
+          <foreignObject x={0} y={0} width={TOOLTIP_W} height={tooltipH}>
+            <div
+              style={{
+                padding: `${TOOLTIP_PAD}px`,
+                fontSize: 11,
+                lineHeight: `${LINE_H}px`,
+                color: "#1E293B",
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
+                userSelect: "none",
+              }}
             >
-              {line.length > 22 ? line.slice(0, 22) + "…" : line}
-            </text>
-          ))}
+              {lines.join("\n")}
+            </div>
+          </foreignObject>
         </g>
       )}
     </g>
@@ -2739,6 +2771,7 @@ function ObjectNode({
   interactive,
   showRelationshipValues,
   showInfoBadges,
+  showRelationshipLabels,
   onSelect,
   onMoveStart,
   onTextEdit,
@@ -2755,6 +2788,7 @@ function ObjectNode({
   interactive: boolean;
   showRelationshipValues?: boolean;
   showInfoBadges?: boolean;
+  showRelationshipLabels?: boolean;
   onSelect: (additive: boolean) => void;
   onMoveStart: (e: React.PointerEvent, additive: boolean) => void;
   onTextEdit: (text: string) => void;
@@ -2907,6 +2941,7 @@ function ObjectNode({
             x={o.x + o.width}
             y={o.y}
             notes={o.notes}
+            color={o.fill}
           />
         )}
       </g>
@@ -3071,7 +3106,7 @@ function ObjectNode({
         ) : (
           <line x1={o.x1} y1={o.y1} x2={o.x2} y2={o.y2} stroke="transparent" strokeWidth={14} />
         )}
-        {o.label && (() => {
+        {showRelationshipLabels && o.label && (() => {
           // Angle of the line in degrees
           const angle = (Math.atan2(o.y2 - o.y1, o.x2 - o.x1) * 180) / Math.PI;
           // Keep text readable — flip if line goes right-to-left
@@ -3111,6 +3146,7 @@ function ObjectNode({
             notes={o.notes}
             label={o.label}
             relationshipValue={o.relationshipValue}
+            color={o.stroke}
           />
         )}
       </g>
@@ -3248,7 +3284,7 @@ function ObjectNode({
               {o.label ?? ""}
             </div>
           </foreignObject>
-        ) : o.label && (() => {
+        ) : showRelationshipLabels && o.label && (() => {
           const angle = (Math.atan2(y2 - y1, x2 - x1) * 180) / Math.PI;
           const rot = angle > 90 || angle < -90 ? angle + 180 : angle;
           const fs = ls.fontSize ?? 11;
@@ -3289,6 +3325,7 @@ function ObjectNode({
             notes={o.notes}
             label={o.label}
             relationshipValue={o.relationshipValue}
+            color={stroke}
           />
         )}
       </g>
