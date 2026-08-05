@@ -49,7 +49,8 @@ export function smoothPath(points: Point[]): string {
 export function lightningPath(points: Point[], intensity = 4): string {
   if (points.length < 2) return polylinePath(points);
   const segs: Point[] = [];
-  for (let i = 0; i < points.length - 1; i++) {
+  const segCount = points.length - 1;
+  for (let i = 0; i < segCount; i++) {
     const a = points[i];
     const b = points[i + 1];
     const dx = b.x - a.x;
@@ -62,10 +63,20 @@ export function lightningPath(points: Point[], intensity = 4): string {
     // intensity=4 → ~1 zigzag per 50px; density stays constant as line grows
     const numZigzags = Math.max(1, Math.round((len / 100) * intensity * 2));
     const mag = Math.max(2, Math.min(8, len * 0.06));
+    const isFirstSeg = i === 0;
+    const isLastSeg = i === segCount - 1;
     segs.push(a);
     for (let j = 1; j <= numZigzags; j++) {
       const t = j / (numZigzags + 1);
       const sign = j % 2 === 0 ? 1 : -1;
+      // Skip waypoints entirely within a short straight "lead-in/out" near
+      // the very start of the first segment and the very end of the last
+      // one — the arrowhead (oriented along the path's local tangent right
+      // at the endpoint) then points cleanly at the target instead of
+      // whatever random angle the last zigzag happened to be.
+      const LEAD = 0.18;
+      if (isFirstSeg && t < LEAD) continue;
+      if (isLastSeg && t > 1 - LEAD) continue;
       segs.push({
         x: a.x + dx * t + px * mag * sign,
         y: a.y + dy * t + py * mag * sign,
