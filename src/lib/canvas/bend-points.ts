@@ -61,7 +61,7 @@ export function lightningPath(points: Point[], intensity = 4): string {
     // Number of deflections proportional to intensity and segment length
     // intensity=4 → ~1 zigzag per 50px; density stays constant as line grows
     const numZigzags = Math.max(1, Math.round((len / 100) * intensity * 2));
-    const mag = Math.max(4, Math.min(16, len * 0.1));
+    const mag = Math.max(2, Math.min(8, len * 0.06));
     segs.push(a);
     for (let j = 1; j <= numZigzags; j++) {
       const t = j / (numZigzags + 1);
