@@ -3063,10 +3063,10 @@ function ObjectNode({
           return (
             <g transform={`translate(${midX} ${midY})`} style={{ pointerEvents: "none" }}>
               <g transform={`rotate(${rot})`}>
-                <rect x={-((o.label.length * 3.5) + 4)} y={-16} width={(o.label.length * 7) + 8} height={14} rx={3} fill="white" fillOpacity={0.85} />
+                <rect x={-((o.label.length * 3.5) + 4)} y={-7} width={(o.label.length * 7) + 8} height={14} rx={3} fill="white" fillOpacity={0.85} />
                 <text
                   x={0}
-                  y={-5}
+                  y={4}
                   textAnchor="middle"
                   fill={o.labelColor ?? o.stroke ?? "#0F172A"}
                   fontSize={11}
@@ -3090,8 +3090,8 @@ function ObjectNode({
         )}
         {showInfoBadges && hasInfo(o) && onInfoClick && (
           <InfoBadge
-            x={Math.max(o.x1, o.x2)}
-            y={Math.min(o.y1, o.y2)}
+            x={midX + 6}
+            y={midY - 6}
             notes={o.notes}
             label={o.label}
             relationshipValue={o.relationshipValue}
@@ -3169,7 +3169,7 @@ function ObjectNode({
         {/* hit area (wider, transparent) */}
         <path d={d} fill="none" stroke="transparent" strokeWidth={14} />
         {editing ? (
-          <foreignObject x={midX - 70} y={midY - (ls.fontSize ?? 11)} width={140} height={(ls.fontSize ?? 11) * 2 + 4}>
+          <foreignObject x={midX - 70} y={midY - (ls.fontSize ?? 11) / 2 - 2} width={140} height={(ls.fontSize ?? 11) + 4}>
             <div
               contentEditable
               suppressContentEditableWarning
@@ -3205,10 +3205,10 @@ function ObjectNode({
           return (
             <g transform={`translate(${midX} ${midY})`} style={{ pointerEvents: "none" }}>
               <g transform={`rotate(${rot})`}>
-                <rect x={-((o.label.length * fs * 0.32) + 4)} y={-fs - 5} width={(o.label.length * fs * 0.64) + 8} height={fs + 3} rx={3} fill="white" fillOpacity={0.85} />
+                <rect x={-((o.label.length * fs * 0.32) + 4)} y={-(fs + 3) / 2} width={(o.label.length * fs * 0.64) + 8} height={fs + 3} rx={3} fill="white" fillOpacity={0.85} />
                 <text
                   x={0}
-                  y={-5}
+                  y={fs * 0.3}
                   textAnchor="middle"
                   fill={o.labelColor ?? stroke}
                   fontSize={fs}
@@ -3234,8 +3234,8 @@ function ObjectNode({
         )}
         {showInfoBadges && hasInfo(o) && onInfoClick && (
           <InfoBadge
-            x={Math.max(x1, x2)}
-            y={Math.min(y1, y2)}
+            x={midX + 6}
+            y={midY - 6}
             notes={o.notes}
             label={o.label}
             relationshipValue={o.relationshipValue}
