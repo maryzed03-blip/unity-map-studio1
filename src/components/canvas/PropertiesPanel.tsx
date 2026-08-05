@@ -105,6 +105,11 @@ export function PropertiesPanel({
   hasStyleClipboard,
   onSegmentPath,
 }: Props) {
+  const [openSection, setOpenSectionState] = useState<string | null>(() => globalOpenSection);
+  const setOpenSection = (title: string | null) => {
+    globalOpenSection = title;
+    setOpenSectionState(title);
+  };
   const isLine = object.type === "line";
   const isConnector = object.type === "connector";
   const isRelation = isLine || isConnector;
@@ -168,7 +173,7 @@ export function PropertiesPanel({
       )}
 
       {!multi && isShape && "text" in object && (
-        <CollapsibleSection title="Περιεχόμενο">
+        <CollapsibleSection title="Περιεχόμενο" openSection={openSection} onOpenSection={setOpenSection}>
           <div className="space-y-2">
             <Label className="text-xs">Ετικέτα</Label>
             <VoiceField
@@ -193,7 +198,7 @@ export function PropertiesPanel({
       )}
 
       {!multi && isShape && "shapeKind" in object && (
-        <CollapsibleSection title="Μορφή σχήματος" defaultOpen={false}>
+        <CollapsibleSection title="Μορφή σχήματος" defaultOpen={false} openSection={openSection} onOpenSection={setOpenSection}>
           <p className="text-[10px] text-muted-foreground -mt-1">
             Η μορφοποίηση (χρώμα, μέγεθος, κείμενο) διατηρείται.
           </p>
@@ -234,7 +239,7 @@ export function PropertiesPanel({
 
       {!multi && isRelation && (
         <>
-          <CollapsibleSection title="Περιεχόμενο">
+          <CollapsibleSection title="Περιεχόμενο" openSection={openSection} onOpenSection={setOpenSection}>
             <div className="space-y-2">
               <Label className="text-xs">Ετικέτα σχέσης</Label>
               <VoiceField
@@ -257,7 +262,7 @@ export function PropertiesPanel({
             </div>
           </CollapsibleSection>
 
-          <CollapsibleSection title="Κατεύθυνση συσχέτισης" defaultOpen={false}>
+          <CollapsibleSection title="Κατεύθυνση συσχέτισης" defaultOpen={false} openSection={openSection} onOpenSection={setOpenSection}>
             <div className="grid grid-cols-2 gap-1.5">
               <ToggleBtn
                 active={!!(object as { arrowStart?: boolean }).arrowStart}
@@ -307,7 +312,7 @@ export function PropertiesPanel({
               const intensity = co.lightningIntensity ?? 4;
               const hasDashLike = !!co.dashed || !!co.dotted;
               return (
-                <CollapsibleSection title="Ποιότητα σχέσης" defaultOpen={false}>
+                <CollapsibleSection title="Ποιότητα σχέσης" defaultOpen={false} openSection={openSection} onOpenSection={setOpenSection}>
                   <div className="grid grid-cols-2 gap-1.5">
                     <ToggleBtn active={cs === "line"} onClick={() => onChange({ connectorStyle: "line" } as Partial<CanvasObject>)}>
                       Απλή
@@ -506,7 +511,7 @@ export function PropertiesPanel({
             const color =
               cur > 0 ? "text-green-600" : cur < 0 ? "text-red-600" : "text-muted-foreground";
             return (
-              <CollapsibleSection title="Συντελεστής επίδρασης" defaultOpen={false}>
+              <CollapsibleSection title="Συντελεστής επίδρασης" defaultOpen={false} openSection={openSection} onOpenSection={setOpenSection}>
                 <div className="flex items-center justify-between mb-1.5">
                   <Label className="text-xs">Συντελεστής επίδρασης</Label>
                   <span className={`text-xs font-semibold tabular-nums ${color}`}>{label}</span>
@@ -585,7 +590,7 @@ export function PropertiesPanel({
         const maxBorder = Math.max(so.width, so.height) > 300 ? 24 : 12;
         return (
           <>
-            <CollapsibleSection title="Γέμισμα" defaultOpen={false}>
+            <CollapsibleSection title="Γέμισμα" defaultOpen={false} openSection={openSection} onOpenSection={setOpenSection}>
               <SwatchRow label="Χρώμα γεμίσματος" value={so.fill ?? "#FFFFFF"} onChange={(c) => onChange({ fill: c })} />
               <SliderRow
                 label="Διαφάνεια χρώματος"
@@ -652,7 +657,7 @@ export function PropertiesPanel({
               )}
             </CollapsibleSection>
 
-            <CollapsibleSection title="Περίγραμμα" defaultOpen={false}>
+            <CollapsibleSection title="Περίγραμμα" defaultOpen={false} openSection={openSection} onOpenSection={setOpenSection}>
               <SwatchRow label="Χρώμα περιγράμματος" value={so.stroke ?? "#0F172A"} onChange={(c) => onChange({ stroke: c })} />
               <div>
                 <Label className="text-xs mb-1.5 block">Τύπος περιγράμματος</Label>
@@ -710,7 +715,7 @@ export function PropertiesPanel({
               />
             </CollapsibleSection>
 
-            <CollapsibleSection title="Συνολική εμφάνιση" defaultOpen={false}>
+            <CollapsibleSection title="Συνολική εμφάνιση" defaultOpen={false} openSection={openSection} onOpenSection={setOpenSection}>
               <SliderRow
                 label="Συνολική διαφάνεια σχήματος"
                 value={Math.round((so.opacity ?? 1) * 100)}
@@ -823,7 +828,7 @@ export function PropertiesPanel({
       )}
 
       {/* Notes / info */}
-      {!multi && !isShape && (
+      {!multi && !isShape && !isRelation && (
         <div className="mt-4 pt-3 border-t border-border">
           <Label className="text-xs mb-1.5 block">{notesLabel}</Label>
           <VoiceField
@@ -911,30 +916,32 @@ function ToggleBtn({
   );
 }
 
-// Remembers each section's open/closed state across deselect→reselect
-// cycles — the whole panel unmounts when nothing is selected, so plain
-// component state would otherwise reset back to defaultOpen every time.
-// Resets naturally on a full page reload, which is fine.
-const sectionOpenCache = new Map<string, boolean>();
+// Accordion: only one section open at a time. Persisted at module level
+// (not component state) so it survives the panel fully unmounting when
+// nothing is selected (deselect → reselect shouldn't reset it).
+let globalOpenSection: string | null = "Περιεχόμενο";
 
 function CollapsibleSection({
   title,
   defaultOpen = true,
+  openSection,
+  onOpenSection,
   children,
 }: {
   title: string;
   defaultOpen?: boolean;
+  openSection: string | null;
+  onOpenSection: (title: string | null) => void;
   children: React.ReactNode;
 }) {
-  const [open, setOpen] = useState(() => sectionOpenCache.get(title) ?? defaultOpen);
+  const isOpen = openSection === title;
   return (
     <details
       className="group mb-3 border border-border rounded-lg overflow-hidden"
-      open={open}
+      open={isOpen}
       onToggle={(e) => {
         const next = (e.currentTarget as HTMLDetailsElement).open;
-        sectionOpenCache.set(title, next);
-        setOpen(next);
+        onOpenSection(next ? title : null);
       }}
     >
       <summary className="flex items-center justify-between px-3 py-2 cursor-pointer select-none bg-muted/50 hover:bg-muted text-xs font-semibold uppercase tracking-wide text-muted-foreground [&::-webkit-details-marker]:hidden">
