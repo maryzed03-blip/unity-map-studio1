@@ -510,6 +510,22 @@ function connectorPath(
 // used for shape/text textColor and connector labelColor alike.
 const MINI_SWATCHES = ["#0F172A", "#EF4444", "#F59E0B", "#22C55E", "#3B82F6", "#8B5CF6", "#FFFFFF"];
 
+// Shared double-click tracker for connectors/lines — module-level (not a
+// component ref) because the curve-control handle is a SEPARATE overlay
+// element, not a DOM descendant of the connector's own <g>. A click that
+// lands on the handle (which sits right on top of the curve's peak, the
+// same spot the label lives) would otherwise never reach the connector's
+// own onClick at all, since stopPropagation on the handle only affects
+// its own (non-existent, unrelated) ancestor chain.
+const lastRelationInteraction: { id: string; time: number } = { id: "", time: 0 };
+function isDoubleInteraction(id: string): boolean {
+  const now = Date.now();
+  const isDouble = lastRelationInteraction.id === id && now - lastRelationInteraction.time < 400;
+  lastRelationInteraction.id = id;
+  lastRelationInteraction.time = now;
+  return isDouble;
+}
+
 // ── Relationship line style helpers (dashed/dotted/wavy/tick-marks) ────
 
 /** Straight-line sine wave between two points — used for the "Κυματιστές"
@@ -2287,6 +2303,11 @@ export function CanvasStage({
                         style={{ cursor: "move" }}
                         onPointerDown={(e) => {
                           e.stopPropagation();
+                          if (isDoubleInteraction(o.id)) {
+                            setSelectedIds([o.id]);
+                            setEditingId(o.id);
+                            return;
+                          }
                           (e.currentTarget as Element).setPointerCapture(e.pointerId);
                           dragRef.current = { kind: "curve-control", id: o.id };
                         }}
@@ -2799,11 +2820,6 @@ function ObjectNode({
   onInfoClick?: () => void;
   obstacles?: Rect[];
 }) {
-  // Used only by connectors' onClick-based double-click detection (see
-  // below) — click, not pointerdown, so it never interferes with the
-  // existing select/drag handling.
-  const lastClickRef = useRef(0);
-
   // keep selectedIdsRef updated whenever a node renders selected
   if (selected && !selectedIdsRef.current.includes(o.id)) {
     selectedIdsRef.current = [...selectedIdsRef.current, o.id];
@@ -3114,10 +3130,10 @@ function ObjectNode({
           return (
             <g transform={`translate(${labelX} ${labelY})`} style={{ pointerEvents: "none" }}>
               <g transform={`rotate(${rot})`}>
-                <rect x={-((o.label.length * 3.5) + 4)} y={-7} width={(o.label.length * 7) + 8} height={14} rx={3} fill="white" fillOpacity={0.85} />
+                <rect x={-((o.label.length * 3.5) + 4)} y={-17} width={(o.label.length * 7) + 8} height={14} rx={3} fill="white" fillOpacity={0.85} />
                 <text
                   x={0}
-                  y={4}
+                  y={-6}
                   textAnchor="middle"
                   fill={o.labelColor ?? o.stroke ?? "#0F172A"}
                   fontSize={11}
@@ -3217,12 +3233,10 @@ function ObjectNode({
         {...common}
         color={stroke}
         onClick={(e) => {
-          const now = Date.now();
-          if (now - lastClickRef.current < 400) {
+          if (isDoubleInteraction(o.id)) {
             e.stopPropagation();
             onStartEdit?.();
           }
-          lastClickRef.current = now;
         }}
       >
         {(o.arrowEnd || o.arrowStart) && (
@@ -3255,7 +3269,7 @@ function ObjectNode({
         {/* hit area (wider, transparent) */}
         <path d={d} fill="none" stroke="transparent" strokeWidth={14} />
         {editing ? (
-          <foreignObject x={labelX - 70} y={labelY - (ls.fontSize ?? 11) / 2 - 2} width={140} height={(ls.fontSize ?? 11) + 4}>
+          <foreignObject x={labelX - 70} y={labelY - (ls.fontSize ?? 11) - 6} width={140} height={(ls.fontSize ?? 11) + 6}>
             <div
               contentEditable
               suppressContentEditableWarning
@@ -3291,10 +3305,10 @@ function ObjectNode({
           return (
             <g transform={`translate(${labelX} ${labelY})`} style={{ pointerEvents: "none" }}>
               <g transform={`rotate(${rot})`}>
-                <rect x={-((o.label.length * fs * 0.32) + 4)} y={-(fs + 3) / 2} width={(o.label.length * fs * 0.64) + 8} height={fs + 3} rx={3} fill="white" fillOpacity={0.85} />
+                <rect x={-((o.label.length * fs * 0.32) + 4)} y={-fs - 6} width={(o.label.length * fs * 0.64) + 8} height={fs + 3} rx={3} fill="white" fillOpacity={0.85} />
                 <text
                   x={0}
-                  y={fs * 0.3}
+                  y={-6}
                   textAnchor="middle"
                   fill={o.labelColor ?? stroke}
                   fontSize={fs}
