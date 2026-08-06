@@ -1983,6 +1983,13 @@ export function CanvasStage({
                         ? cur.filter((id) => !groupSiblings.includes(id))
                         : Array.from(new Set([...cur, ...groupSiblings]));
                     }
+                    // Clicking (not shift-clicking) an object that's already
+                    // part of a larger multi-selection keeps that whole
+                    // selection intact — the user is very likely about to
+                    // drag the group together, not pick just this one.
+                    if (cur.length > 1 && groupSiblings.every((id) => cur.includes(id))) {
+                      return cur;
+                    }
                     return groupSiblings;
                   });
                 }}
