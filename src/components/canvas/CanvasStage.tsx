@@ -529,50 +529,85 @@ function isDoubleInteraction(id: string): boolean {
 
 // ── Relationship line style helpers (dashed/dotted/wavy/tick-marks) ────
 
-/** Straight-line sine wave between two points — used for the "Κυματιστές"
- *  relationship style. Deliberately ignores the connector's routing type
- *  (orthogonal/curved bends) and always draws directly between the two
- *  resolved endpoints, matching the genogram convention of a simple wavy
- *  line indicating a conflictual relationship. */
-function wavyPath(x1: number, y1: number, x2: number, y2: number): string {
-  const dx = x2 - x1, dy = y2 - y1;
-  const len = Math.hypot(dx, dy) || 1;
-  const ux = dx / len, uy = dy / len; // unit vector along the line
-  const px = -uy, py = ux; // perpendicular unit vector
+/** Arc-length-parametrized helper: given a polyline `pts`, returns the
+ *  position and local perpendicular unit vector at fractional distance
+ *  `t` (0..1) along its total length. Used so "wavy"/"tick marks" can
+ *  follow ANY base path — a straight line OR a curve pre-sampled into
+ *  points — instead of only ever assuming a straight line between two
+ *  endpoints. */
+function pointAlong(pts: { x: number; y: number }[], t: number): { x: number; y: number; px: number; py: number } {
+  if (pts.length < 2) return { x: pts[0]?.x ?? 0, y: pts[0]?.y ?? 0, px: 0, py: 1 };
+  const segLens: number[] = [];
+  let total = 0;
+  for (let i = 1; i < pts.length; i++) {
+    const l = Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+    segLens.push(l);
+    total += l;
+  }
+  const target = Math.max(0, Math.min(1, t)) * total;
+  let acc = 0;
+  for (let i = 0; i < segLens.length; i++) {
+    const segLen = segLens[i] || 1;
+    if (acc + segLen >= target || i === segLens.length - 1) {
+      const localT = Math.max(0, Math.min(1, (target - acc) / segLen));
+      const a = pts[i], b = pts[i + 1];
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const len = Math.hypot(dx, dy) || 1;
+      return {
+        x: a.x + dx * localT,
+        y: a.y + dy * localT,
+        px: -dy / len,
+        py: dx / len,
+      };
+    }
+    acc += segLen;
+  }
+  const last = pts[pts.length - 1];
+  return { x: last.x, y: last.y, px: 0, py: 1 };
+}
+
+/** Sine wave that follows the given base path (straight line OR curve
+ *  sample points) via arc-length parametrization — used for the
+ *  "Κυματιστές" relationship style. */
+function wavyPathAlong(basePts: { x: number; y: number }[]): string {
+  let total = 0;
+  for (let i = 1; i < basePts.length; i++) total += Math.hypot(basePts[i].x - basePts[i - 1].x, basePts[i].y - basePts[i - 1].y);
   const wavelength = 14;
   const amplitude = 4;
-  const segments = Math.max(2, Math.round(len / wavelength));
-  let d = `M ${x1} ${y1}`;
+  const segments = Math.max(2, Math.round(total / wavelength));
+  const first = pointAlong(basePts, 0);
+  let d = `M ${first.x} ${first.y}`;
   for (let i = 0; i < segments; i++) {
-    const t0 = i / segments, t1 = (i + 0.5) / segments;
+    const t1 = (i + 0.5) / segments;
     const sign = i % 2 === 0 ? 1 : -1;
-    const cx = x1 + dx * t1 + px * amplitude * sign;
-    const cy = y1 + dy * t1 + py * amplitude * sign;
-    const ex = x1 + dx * ((i + 1) / segments);
-    const ey = y1 + dy * ((i + 1) / segments);
-    d += ` Q ${cx} ${cy} ${ex} ${ey}`;
+    const mid = pointAlong(basePts, t1);
+    const end = pointAlong(basePts, (i + 1) / segments);
+    d += ` Q ${mid.x + mid.px * amplitude * sign} ${mid.y + mid.py * amplitude * sign} ${end.x} ${end.y}`;
   }
   return d;
 }
+function wavyPath(x1: number, y1: number, x2: number, y2: number): string {
+  return wavyPathAlong([{ x: x1, y: y1 }, { x: x2, y: y2 }]);
+}
 
-/** Short perpendicular tick marks evenly spaced along the direct line
- *  between two points — the "Κάθετες" style (genogram "cutoff"
- *  relationship convention). Returned as a single multi-segment path so
- *  it can be stroked once alongside the main line. */
-function tickMarksAlong(x1: number, y1: number, x2: number, y2: number): string {
-  const dx = x2 - x1, dy = y2 - y1;
-  const len = Math.hypot(dx, dy) || 1;
-  const ux = dx / len, uy = dy / len;
-  const px = -uy, py = ux;
+/** Short perpendicular tick marks evenly spaced along the given base path
+ *  — the "Κάθετες" style (genogram "cutoff" relationship convention).
+ *  Follows curves via arc-length parametrization, same as wavyPathAlong. */
+function tickMarksAlongPoints(basePts: { x: number; y: number }[]): string {
+  let total = 0;
+  for (let i = 1; i < basePts.length; i++) total += Math.hypot(basePts[i].x - basePts[i - 1].x, basePts[i].y - basePts[i - 1].y);
   const half = 6;
-  const count = Math.max(1, Math.min(6, Math.round(len / 30)));
+  const count = Math.max(1, Math.min(6, Math.round(total / 30)));
   let d = "";
   for (let i = 1; i <= count; i++) {
     const t = i / (count + 1);
-    const cx = x1 + dx * t, cy = y1 + dy * t;
-    d += ` M ${cx - px * half} ${cy - py * half} L ${cx + px * half} ${cy + py * half}`;
+    const p = pointAlong(basePts, t);
+    d += ` M ${p.x - p.px * half} ${p.y - p.py * half} L ${p.x + p.px * half} ${p.y + p.py * half}`;
   }
   return d;
+}
+function tickMarksAlong(x1: number, y1: number, x2: number, y2: number): string {
+  return tickMarksAlongPoints([{ x: x1, y: y1 }, { x: x2, y: y2 }]);
 }
 
 /** Combines dashed + dotted into one dasharray when both are on — each
@@ -3192,7 +3227,7 @@ function ObjectNode({
       const midIdx = Math.floor(polyPts.length / 2);
       labelX = polyPts[midIdx].x;
       labelY = polyPts[midIdx].y;
-    } else if (route === "curved" && !o.wavy) {
+    } else if (route === "curved") {
       let ctrlX: number, ctrlY: number;
       if (o.curveControl) {
         ctrlX = o.curveControl.x;
@@ -3207,18 +3242,20 @@ function ObjectNode({
       // Point at t=0.5 on the quadratic bezier through (x1,y1) ctrl (x2,y2).
       labelX = (x1 + 2 * ctrlX + x2) / 4;
       labelY = (y1 + 2 * ctrlY + y2) / 4;
-    } else if (o.wavy) {
-      // wavyPath bows perpendicular from the straight line at its midpoint
-      // on odd-numbered segments — close enough to just nudge slightly.
-      labelX = midX;
-      labelY = midY;
     }
     const bezierLen = Math.hypot(x2 - x1, y2 - y1) || 1;
     const bezierOff = Math.min(60, bezierLen * 0.25);
     const defaultCtrlX = midX - ((y2 - y1) / bezierLen) * bezierOff;
     const defaultCtrlY = midY + ((x2 - x1) / bezierLen) * bezierOff;
+    // Base path for style overlays (wavy / tick marks) — follows the
+    // actual curve when curved, not just the straight line between the
+    // two endpoints.
+    const stylePathPts =
+      route === "curved"
+        ? sampleQuadraticBezier(x1, y1, o.curveControl?.x ?? defaultCtrlX, o.curveControl?.y ?? defaultCtrlY, x2, y2, 16)
+        : [{ x: x1, y: y1 }, { x: x2, y: y2 }];
     const d = o.wavy
-      ? wavyPath(x1, y1, x2, y2)
+      ? wavyPathAlong(stylePathPts)
       : o.connectorStyle === "lightning"
         ? route === "zigzag"
           ? autoRoutePath(x1, y1, x2, y2, obstacles) // auto-route then lightning overlay not applicable; use auto path directly
@@ -3280,7 +3317,7 @@ function ObjectNode({
           markerStart={o.arrowStart ? `url(#${arrowStartId})` : undefined}
         />
         {o.tickMarks && (
-          <path d={tickMarksAlong(x1, y1, x2, y2)} fill="none" stroke={stroke} strokeWidth={Math.max(1, sw * 0.75)} style={{ pointerEvents: "none" }} />
+          <path d={tickMarksAlongPoints(stylePathPts)} fill="none" stroke={stroke} strokeWidth={Math.max(1, sw * 0.75)} style={{ pointerEvents: "none" }} />
         )}
         {/* hit area (wider, transparent) */}
         <path d={d} fill="none" stroke="transparent" strokeWidth={14} />
