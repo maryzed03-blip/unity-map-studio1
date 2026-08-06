@@ -45,15 +45,39 @@ export function SymbolGlyph({ o }: { o: SymbolObject }) {
       );
     }
     case "loop": {
-      const r = Math.min(w, h) / 2 - sw;
+      const r = Math.min(w, h) / 2 - sw - 3;
+      // Arc sweeping ~290° clockwise (SVG y-down), leaving a gap, with a
+      // clear filled arrowhead at the end showing the cycle direction —
+      // the old version's arrowhead was two barely-visible 4px ticks.
+      const startDeg = -40;
+      const endDeg = 250;
+      const toRad = (d: number) => (d * Math.PI) / 180;
+      const sx = cx + r * Math.cos(toRad(startDeg));
+      const sy = cy + r * Math.sin(toRad(startDeg));
+      const ex = cx + r * Math.cos(toRad(endDeg));
+      const ey = cy + r * Math.sin(toRad(endDeg));
+      // Direction of travel at the end point (tangent for increasing angle).
+      const tangent = toRad(endDeg) + Math.PI / 2;
+      const headLen = Math.max(6, sw * 2.6);
+      const headWidth = Math.max(4, sw * 1.8);
+      const tipX = ex + (headLen * 0.55) * Math.cos(tangent);
+      const tipY = ey + (headLen * 0.55) * Math.sin(tangent);
+      const backX = ex - (headLen * 0.45) * Math.cos(tangent);
+      const backY = ey - (headLen * 0.45) * Math.sin(tangent);
+      const perpX = Math.cos(tangent + Math.PI / 2) * headWidth;
+      const perpY = Math.sin(tangent + Math.PI / 2) * headWidth;
       return (
         <g color={stroke}>
-          <circle cx={cx} cy={cy} r={r} fill="none" stroke={stroke} strokeWidth={sw} />
           <path
-            d={`M ${cx + r} ${cy} l -4 -4 M ${cx + r} ${cy} l -4 4`}
+            d={`M ${sx} ${sy} A ${r} ${r} 0 1 1 ${backX} ${backY}`}
             stroke={stroke}
             strokeWidth={sw}
             fill="none"
+            strokeLinecap="round"
+          />
+          <polygon
+            points={`${tipX},${tipY} ${backX + perpX},${backY + perpY} ${backX - perpX},${backY - perpY}`}
+            fill={stroke}
           />
         </g>
       );
