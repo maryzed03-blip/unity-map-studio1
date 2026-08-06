@@ -521,7 +521,8 @@ const MINI_SWATCHES = ["#0F172A", "#EF4444", "#F59E0B", "#22C55E", "#3B82F6", "#
 const lastRelationInteraction: { id: string; time: number } = { id: "", time: 0 };
 function isDoubleInteraction(id: string): boolean {
   const now = Date.now();
-  const isDouble = lastRelationInteraction.id === id && now - lastRelationInteraction.time < 400;
+  const gap = now - lastRelationInteraction.time;
+  const isDouble = lastRelationInteraction.id === id && gap > 40 && gap < 400;
   lastRelationInteraction.id = id;
   lastRelationInteraction.time = now;
   return isDouble;
@@ -1205,6 +1206,8 @@ export function CanvasStage({
       setSelectedIds([c.id]);
       setConnectorSource(null);
       setTool("select");
+      lastRelationInteraction.id = "";
+      lastRelationInteraction.time = 0;
     },
     [commit, connectorSource, setTool, state.objects, tool],
   );
@@ -1699,8 +1702,6 @@ export function CanvasStage({
           ...s,
           objects: s.objects.map((o) => {
             if (o.type === "connector") {
-              // Stage 6.1: respect manual endpoint placement.
-              if (o.magnetLocked) return o;
               if (!affected.has(o.sourceObjectId) && !affected.has(o.targetObjectId)) return o;
               const src = byId.get(o.sourceObjectId),
                 tgt = byId.get(o.targetObjectId);
@@ -2541,6 +2542,7 @@ export function CanvasStage({
               } as Partial<CanvasObject>);
             } else if (obj.type === "line") {
               updateObject(obj.id, {
+                lineKind: "straight",
                 bendPoints: [
                   { x: obj.x1 + (obj.x2 - obj.x1) / 3, y: obj.y1 + (obj.y2 - obj.y1) / 3 },
                   { x: obj.x1 + (obj.x2 - obj.x1) * 2 / 3, y: obj.y1 + (obj.y2 - obj.y1) * 2 / 3 },
