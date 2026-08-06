@@ -36,6 +36,7 @@ import {
   polylinePath,
   removeBendPoint,
   smoothPath,
+  sampleQuadraticBezier,
   type Rect,
 } from "@/lib/canvas/bend-points";
 import type { ToolId } from "@/lib/workspaces";
@@ -3212,12 +3213,27 @@ function ObjectNode({
       labelX = midX;
       labelY = midY;
     }
+    const bezierLen = Math.hypot(x2 - x1, y2 - y1) || 1;
+    const bezierOff = Math.min(60, bezierLen * 0.25);
+    const defaultCtrlX = midX - ((y2 - y1) / bezierLen) * bezierOff;
+    const defaultCtrlY = midY + ((x2 - x1) / bezierLen) * bezierOff;
     const d = o.wavy
       ? wavyPath(x1, y1, x2, y2)
       : o.connectorStyle === "lightning"
         ? route === "zigzag"
           ? autoRoutePath(x1, y1, x2, y2, obstacles) // auto-route then lightning overlay not applicable; use auto path directly
-          : lightningPath(polyPts, intensity)
+          : route === "curved"
+            ? lightningPath(
+                sampleQuadraticBezier(
+                  x1, y1,
+                  o.curveControl?.x ?? defaultCtrlX,
+                  o.curveControl?.y ?? defaultCtrlY,
+                  x2, y2,
+                  8,
+                ),
+                intensity,
+              )
+            : lightningPath(polyPts, intensity)
         : o.bendPoints && o.bendPoints.length > 0
           ? route === "curved"
             ? smoothPath(polyPts)
