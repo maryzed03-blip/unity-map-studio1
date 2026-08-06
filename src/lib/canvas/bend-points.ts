@@ -46,6 +46,24 @@ export function smoothPath(points: Point[]): string {
  *  segment so the result reads as a lightning bolt.
  *  @param intensity 1 (sparse) to 10 (dense). Default 4. Controls how many
  *  zig-zags appear per 100px of line length — stays constant when line grows. */
+/** Samples N+1 evenly-spaced points along a quadratic bezier curve — used
+ *  to give the "lightning" (Έντασης) zigzag style a curved base path
+ *  instead of only ever being able to zigzag a straight line. */
+export function sampleQuadraticBezier(
+  x1: number, y1: number, ctrlX: number, ctrlY: number, x2: number, y2: number, n = 6,
+): Point[] {
+  const pts: Point[] = [];
+  for (let i = 0; i <= n; i++) {
+    const t = i / n;
+    const mt = 1 - t;
+    pts.push({
+      x: mt * mt * x1 + 2 * mt * t * ctrlX + t * t * x2,
+      y: mt * mt * y1 + 2 * mt * t * ctrlY + t * t * y2,
+    });
+  }
+  return pts;
+}
+
 export function lightningPath(points: Point[], intensity = 4): string {
   if (points.length < 2) return polylinePath(points);
   const segs: Point[] = [];
