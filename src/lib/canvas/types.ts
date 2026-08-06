@@ -90,6 +90,10 @@ export interface ShapeObject extends BaseObject {
   italic?: boolean;
   textTransform?: "none" | "uppercase" | "capitalize";
   /** Fill opacity (0–100), independent of the shape's overall opacity. */
+  /** Set by the "Σημείωση" (sticky note) tool — lets the properties panel
+   *  offer a curated fill+border color-pair palette instead of separate
+   *  pickers, so picking one color coordinates both automatically. */
+  isSticky?: boolean;
   fillOpacity?: number;
   fillTexture?: FillTextureKind;
   /** Independent color for the texture pattern lines/dots — defaults to
