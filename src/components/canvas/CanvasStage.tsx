@@ -606,6 +606,14 @@ export function CanvasStage({
 }: Props) {
   const [state, setState] = useState<CanvasState>(() => emptyCanvasState());
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  // Snapshot of positions right before the first align/distribute action
+  // on the current selection — lets "Επαναφορά θέσης" undo just that,
+  // without touching unrelated undo history. Cleared whenever the
+  // selection itself changes.
+  const positionSnapshotRef = useRef<Map<string, { x: number; y: number; x1?: number; y1?: number; x2?: number; y2?: number }> | null>(null);
+  useEffect(() => {
+    positionSnapshotRef.current = null;
+  }, [selectedIds]);
   // Id of the text object currently in edit mode (double-click). Null when no edit.
   const [editingId, setEditingId] = useState<string | null>(null);
   // Shape hovered with select tool — shows magnet hints
@@ -853,6 +861,33 @@ export function CanvasStage({
       return result;
     });
   }, [mapId]);
+
+  const capturePositionSnapshot = () => {
+    if (positionSnapshotRef.current) return;
+    const map = new Map<string, { x: number; y: number; x1?: number; y1?: number; x2?: number; y2?: number }>();
+    for (const o of state.objects) {
+      if (!selectedIds.includes(o.id)) continue;
+      if (o.type === "line") map.set(o.id, { x: o.x, y: o.y, x1: o.x1, y1: o.y1, x2: o.x2, y2: o.y2 });
+      else if ("x" in o && "y" in o) map.set(o.id, { x: o.x, y: o.y });
+    }
+    positionSnapshotRef.current = map;
+  };
+  const resetPositionSnapshot = useCallback(() => {
+    const snap = positionSnapshotRef.current;
+    if (!snap || snap.size === 0) return;
+    commit((s) => ({
+      ...s,
+      objects: s.objects.map((o) => {
+        const p = snap.get(o.id);
+        if (!p) return o;
+        if (o.type === "line" && p.x1 !== undefined) {
+          return { ...o, x: p.x, y: p.y, x1: p.x1, y1: p.y1!, x2: p.x2!, y2: p.y2! };
+        }
+        return { ...o, x: p.x, y: p.y } as CanvasObject;
+      }),
+    }));
+    positionSnapshotRef.current = null;
+  }, [commit]);
 
   // Like commit but does NOT push to undo — used for intermediate drag/move
   // frames so undo doesn't replay every pixel of a drag.
@@ -1146,6 +1181,7 @@ export function CanvasStage({
   const distributeSelected = useCallback(
     (axis: "h" | "v") => {
       if (selectedIds.length < 3) return;
+      capturePositionSnapshot();
       commit((s) => {
         const sel = s.objects.filter((o) => selectedIds.includes(o.id));
         const boxes = sel.map((o) => ({ id: o.id, b: bbox(o) }));
@@ -1164,6 +1200,52 @@ export function CanvasStage({
           } else {
             moves.set(id, { dx: 0, dy: cursor - b.y });
             cursor += b.h + gap;
+          }
+        }
+        return {
+          ...s,
+          objects: s.objects.map((o) => {
+            const m = moves.get(o.id);
+            if (!m) return o;
+            if (o.type === "line") {
+              return {
+                ...o,
+                x: o.x + m.dx,
+                y: o.y + m.dy,
+                x1: o.x1 + m.dx,
+                y1: o.y1 + m.dy,
+                x2: o.x2 + m.dx,
+                y2: o.y2 + m.dy,
+              };
+            }
+            return { ...o, x: o.x + m.dx, y: o.y + m.dy } as CanvasObject;
+          }),
+        };
+      });
+    },
+    [commit, selectedIds],
+  );
+
+  /** Distribute with an EXACT gap value (not "fill the existing span
+   *  evenly") — powers the gap slider in the properties panel. Works
+   *  from 2 objects since it doesn't need an existing span to divide up. */
+  const distributeWithGap = useCallback(
+    (axis: "h" | "v", gapPx: number) => {
+      if (selectedIds.length < 2) return;
+      capturePositionSnapshot();
+      commit((s) => {
+        const sel = s.objects.filter((o) => selectedIds.includes(o.id));
+        const boxes = sel.map((o) => ({ id: o.id, b: bbox(o) }));
+        boxes.sort((a, b) => (axis === "h" ? a.b.x - b.b.x : a.b.y - b.b.y));
+        let cursor = axis === "h" ? boxes[0].b.x : boxes[0].b.y;
+        const moves = new Map<string, { dx: number; dy: number }>();
+        for (const { id, b } of boxes) {
+          if (axis === "h") {
+            moves.set(id, { dx: cursor - b.x, dy: 0 });
+            cursor += b.w + gapPx;
+          } else {
+            moves.set(id, { dx: 0, dy: cursor - b.y });
+            cursor += b.h + gapPx;
           }
         }
         return {
@@ -2570,6 +2652,9 @@ export function CanvasStage({
           onSendToBack={sendToBack}
           onAlign={(mode) => alignSelected(mode)}
           onDistribute={distributeSelected}
+          onDistributeGap={distributeWithGap}
+          onResetPositions={resetPositionSnapshot}
+          hasPositionSnapshot={!!positionSnapshotRef.current && positionSnapshotRef.current.size > 0}
           onGroup={groupSelected}
           onUngroup={ungroupSelected}
           onLockToggle={lockToggle}
@@ -2695,6 +2780,7 @@ export function CanvasStage({
   // ── helpers that need closure access ───────────────────────────────
   function alignSelected(mode: "left" | "right" | "center-h" | "top" | "bottom" | "center-v") {
     if (selectedIds.length < 2) return;
+    capturePositionSnapshot();
     const sel = state.objects.filter((o) => selectedIds.includes(o.id));
     const boxes = sel.map((o) => ({ id: o.id, ...bbox(o) }));
     const minX = Math.min(...boxes.map((b) => b.x));
