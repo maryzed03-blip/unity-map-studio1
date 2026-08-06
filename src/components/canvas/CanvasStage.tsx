@@ -1499,6 +1499,7 @@ export function CanvasStage({
       const o = makeText(p.x, p.y);
       commit((s) => ({ ...s, objects: [...s.objects, o] }));
       setSelectedIds([o.id]);
+      setEditingId(o.id);
       setTool("select");
       return;
     }
