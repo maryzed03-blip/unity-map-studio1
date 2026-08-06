@@ -862,7 +862,7 @@ export function PropertiesPanel({
             <Group className="h-3.5 w-3.5" />
           </IconBtn>
         )}
-        {!multi && isGrouped && (
+        {isGrouped && (
           <IconBtn title="Κατάργηση ομάδας (Ctrl+Shift+G)" onClick={onUngroup}>
             <Ungroup className="h-3.5 w-3.5" />
           </IconBtn>
