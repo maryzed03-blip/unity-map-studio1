@@ -511,21 +511,24 @@ function connectorPath(
 // used for shape/text textColor and connector labelColor alike.
 const MINI_SWATCHES = ["#0F172A", "#EF4444", "#F59E0B", "#22C55E", "#3B82F6", "#8B5CF6", "#FFFFFF"];
 
-// Shared double-click tracker for connectors/lines — module-level (not a
-// component ref) because the curve-control handle is a SEPARATE overlay
-// element, not a DOM descendant of the connector's own <g>. A click that
-// lands on the handle (which sits right on top of the curve's peak, the
-// same spot the label lives) would otherwise never reach the connector's
-// own onClick at all, since stopPropagation on the handle only affects
-// its own (non-existent, unrelated) ancestor chain.
-const lastRelationInteraction: { id: string; time: number } = { id: "", time: 0 };
-function isDoubleInteraction(id: string): boolean {
-  const now = Date.now();
-  const gap = now - lastRelationInteraction.time;
-  const isDouble = lastRelationInteraction.id === id && gap > 40 && gap < 400;
-  lastRelationInteraction.id = id;
-  lastRelationInteraction.time = now;
-  return isDouble;
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+/** Seeds a contentEditable element's innerHTML exactly once (on mount),
+ *  then never touches it again — the DOM itself manages content from
+ *  then on as the user types/formats, so React never fights it (which
+ *  would otherwise reset the cursor position on every keystroke). */
+function seedRichTextRef(html: string) {
+  return (el: HTMLDivElement | null) => {
+    if (el && !el.dataset.seeded) {
+      el.innerHTML = html || "";
+      el.dataset.seeded = "1";
+    }
+  };
 }
 
 // ── Relationship line style helpers (dashed/dotted/wavy/tick-marks) ────
@@ -1206,8 +1209,6 @@ export function CanvasStage({
       setSelectedIds([c.id]);
       setConnectorSource(null);
       setTool("select");
-      lastRelationInteraction.id = "";
-      lastRelationInteraction.time = 0;
     },
     [commit, connectorSource, setTool, state.objects, tool],
   );
@@ -1945,7 +1946,8 @@ export function CanvasStage({
                   (e.currentTarget as Element).setPointerCapture(e.pointerId);
                   e.stopPropagation();
                 }}
-                onTextEdit={(text) => updateObject(o.id, { text } as Partial<CanvasObject>)}
+                onTextEdit={(text, richText) => updateObject(o.id, { text, richText } as Partial<CanvasObject>)}
+                onLabelEdit={(label, richText) => updateObject(o.id, { label, labelRichText: richText } as Partial<CanvasObject>)}
                 editing={editingId === o.id}
                 onStartEdit={() => {
                   setSelectedIds([o.id]);
@@ -2340,13 +2342,13 @@ export function CanvasStage({
                         style={{ cursor: "move" }}
                         onPointerDown={(e) => {
                           e.stopPropagation();
-                          if (isDoubleInteraction(o.id)) {
-                            setSelectedIds([o.id]);
-                            setEditingId(o.id);
-                            return;
-                          }
                           (e.currentTarget as Element).setPointerCapture(e.pointerId);
                           dragRef.current = { kind: "curve-control", id: o.id };
+                        }}
+                        onDoubleClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedIds([o.id]);
+                          setEditingId(o.id);
                         }}
                       />
                     </>
@@ -2408,6 +2410,35 @@ export function CanvasStage({
           const curTransform = isConn ? co.labelStyle?.textTransform ?? "none" : so.textTransform ?? "none";
           const patchLabelStyle = (patch: Partial<NonNullable<ConnectorObject["labelStyle"]>>) =>
             updateObject(editingId, { labelStyle: { ...co.labelStyle, ...patch } } as Partial<CanvasObject>);
+
+          // If there's an active (non-collapsed) text selection inside the
+          // contentEditable being edited, apply formatting to JUST that
+          // selection via the browser's own rich-text command instead of
+          // toggling the whole label/shape text style. Persists the
+          // resulting HTML as richText/labelRichText afterwards.
+          const applySelectionOrWhole = (
+            execCmd: string,
+            value: string | undefined,
+            wholeToggle: () => void,
+          ) => {
+            const sel = window.getSelection();
+            const active = document.activeElement as HTMLElement | null;
+            const hasSelection =
+              sel && !sel.isCollapsed && sel.rangeCount > 0 && active?.isContentEditable;
+            if (hasSelection && active) {
+              document.execCommand(execCmd, false, value);
+              const text = active.textContent ?? "";
+              const html = active.innerHTML;
+              if (isConn) updateObject(editingId, { label: text, labelRichText: html } as Partial<CanvasObject>);
+              else updateObject(editingId, { text, richText: html } as Partial<CanvasObject>);
+            } else {
+              wholeToggle();
+            }
+          };
+          // Keeps focus (and the selection) on the contentEditable instead
+          // of letting the button steal it, which would collapse the
+          // selection before the format command could run.
+          const keepFocus = (e: React.MouseEvent) => e.preventDefault();
           return (
             <div
               className="absolute bottom-16 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1 rounded-lg border border-border bg-surface shadow-md px-2 py-1"
@@ -2436,18 +2467,24 @@ export function CanvasStage({
               <div className="w-px h-5 bg-border mx-0.5" />
               <button
                 className={`h-7 px-2 rounded text-xs font-medium hover:bg-muted transition-colors ${curBold ? "bg-primary text-primary-foreground" : "text-foreground"}`}
-                title="Έντονα (Bold)"
+                title="Έντονα (Bold) — επίλεξε κείμενο για μερική μορφοποίηση"
+                onMouseDown={keepFocus}
                 onClick={() =>
-                  isConn ? patchLabelStyle({ bold: !curBold }) : updateObject(editingId, { bold: !curBold } as Partial<CanvasObject>)
+                  applySelectionOrWhole("bold", undefined, () =>
+                    isConn ? patchLabelStyle({ bold: !curBold }) : updateObject(editingId, { bold: !curBold } as Partial<CanvasObject>),
+                  )
                 }
               >
                 B
               </button>
               <button
                 className={`h-7 px-2 rounded text-xs italic hover:bg-muted transition-colors ${curItalic ? "bg-primary text-primary-foreground" : "text-foreground"}`}
-                title="Πλάγια (Italic)"
+                title="Πλάγια (Italic) — επίλεξε κείμενο για μερική μορφοποίηση"
+                onMouseDown={keepFocus}
                 onClick={() =>
-                  isConn ? patchLabelStyle({ italic: !curItalic }) : updateObject(editingId, { italic: !curItalic } as Partial<CanvasObject>)
+                  applySelectionOrWhole("italic", undefined, () =>
+                    isConn ? patchLabelStyle({ italic: !curItalic }) : updateObject(editingId, { italic: !curItalic } as Partial<CanvasObject>),
+                  )
                 }
               >
                 I
@@ -2462,10 +2499,13 @@ export function CanvasStage({
                   <button
                     key={c}
                     title={c}
+                    onMouseDown={keepFocus}
                     onClick={() =>
-                      isConn
-                        ? updateObject(editingId, { labelColor: c } as Partial<CanvasObject>)
-                        : updateObject(editingId, { textColor: c } as Partial<CanvasObject>)
+                      applySelectionOrWhole("foreColor", c, () =>
+                        isConn
+                          ? updateObject(editingId, { labelColor: c } as Partial<CanvasObject>)
+                          : updateObject(editingId, { textColor: c } as Partial<CanvasObject>),
+                      )
                     }
                     className="h-5 w-5 rounded-full border border-border shrink-0"
                     style={{ backgroundColor: c }}
@@ -2834,6 +2874,7 @@ function ObjectNode({
   onSelect,
   onMoveStart,
   onTextEdit,
+  onLabelEdit,
   editing,
   onStartEdit,
   onHoverChange,
@@ -2850,7 +2891,10 @@ function ObjectNode({
   showRelationshipLabels?: boolean;
   onSelect: (additive: boolean) => void;
   onMoveStart: (e: React.PointerEvent, additive: boolean) => void;
-  onTextEdit: (text: string) => void;
+  onTextEdit: (text: string, richText?: string) => void;
+  /** Separate from onTextEdit — lines/connectors store their editable
+   *  text in `label`/`labelRichText`, not `text`/`richText`. */
+  onLabelEdit?: (label: string, richText?: string) => void;
   editing?: boolean;
   onStartEdit?: () => void;
   onHoverChange?: (hovered: boolean) => void;
@@ -2943,16 +2987,19 @@ function ObjectNode({
               userSelect: "none",
               pointerEvents: "none",
             }}
-          >
-            {o.text}
-          </div>
+            {...(o.richText
+              ? { dangerouslySetInnerHTML: { __html: o.richText } }
+              : { children: o.text })}
+          />
         </foreignObject>
         {editing && (
           <foreignObject x={o.x + pad} y={o.y + pad} width={Math.max(10, o.width - pad * 2)} height={Math.max(10, o.height - pad * 2)}>
             <div
+              key={o.id}
+              ref={seedRichTextRef(o.richText ?? escapeHtml(o.text ?? ""))}
               contentEditable
               suppressContentEditableWarning
-              onBlur={(e) => onTextEdit(e.currentTarget.textContent ?? "")}
+              onBlur={(e) => onTextEdit(e.currentTarget.textContent ?? "", e.currentTarget.innerHTML)}
               onPointerDown={(e) => e.stopPropagation()}
               onInput={(e) => {
                 // Auto-resize shape height to fit text
@@ -2961,7 +3008,7 @@ function ObjectNode({
                 const availH = o.height - pad * 2;
                 if (scrollH > availH) {
                   const newH = scrollH + pad * 2 + 4;
-                  onTextEdit(el.textContent ?? "");
+                  onTextEdit(el.textContent ?? "", el.innerHTML);
                   onResize?.(newH);
                 }
               }}
@@ -2984,9 +3031,7 @@ function ObjectNode({
                 cursor: "text",
                 background: "transparent",
               }}
-            >
-              {o.text}
-            </div>
+            />
           </foreignObject>
         )}
         {selected && <SelectionRect {...bbox(o)} />}
@@ -3042,32 +3087,54 @@ function ObjectNode({
         }}
       >
         <foreignObject x={o.x} y={o.y} width={w} height={h}>
-          <div
-            contentEditable={!!editing}
-            suppressContentEditableWarning
-            onBlur={(e) => onTextEdit(e.currentTarget.textContent ?? "")}
-            onPointerDown={(e) => {
-              if (editing) e.stopPropagation();
-            }}
-            style={{
-              color: o.textColor ?? "#0F172A",
-              fontSize: o.fontSize,
-              fontWeight: o.bold ? 700 : 400,
-              fontStyle: o.italic ? "italic" : "normal",
-              textTransform: (o.textTransform as React.CSSProperties["textTransform"]) ?? "none",
-              lineHeight: 1.3,
-              outline: editing ? "1px dashed #3B82F6" : "none",
-              padding: 2,
-              minWidth: 40,
-              whiteSpace: "pre-wrap",
-              wordBreak: "break-word",
-              cursor: editing ? "text" : interactive ? "move" : "default",
-              userSelect: editing ? "text" : "none",
-              pointerEvents: editing ? "auto" : "none",
-            }}
-          >
-            {o.text}
-          </div>
+          {editing ? (
+            <div
+              key={o.id}
+              ref={seedRichTextRef((o as unknown as { richText?: string }).richText ?? escapeHtml(o.text ?? ""))}
+              contentEditable
+              suppressContentEditableWarning
+              onBlur={(e) => onTextEdit(e.currentTarget.textContent ?? "", e.currentTarget.innerHTML)}
+              onPointerDown={(e) => e.stopPropagation()}
+              style={{
+                color: o.textColor ?? "#0F172A",
+                fontSize: o.fontSize,
+                fontWeight: o.bold ? 700 : 400,
+                fontStyle: o.italic ? "italic" : "normal",
+                textTransform: (o.textTransform as React.CSSProperties["textTransform"]) ?? "none",
+                lineHeight: 1.3,
+                outline: "1px dashed #3B82F6",
+                padding: 2,
+                minWidth: 40,
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
+                cursor: "text",
+                userSelect: "text",
+                pointerEvents: "auto",
+              }}
+            />
+          ) : (
+            <div
+              style={{
+                color: o.textColor ?? "#0F172A",
+                fontSize: o.fontSize,
+                fontWeight: o.bold ? 700 : 400,
+                fontStyle: o.italic ? "italic" : "normal",
+                textTransform: (o.textTransform as React.CSSProperties["textTransform"]) ?? "none",
+                lineHeight: 1.3,
+                outline: "none",
+                padding: 2,
+                minWidth: 40,
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
+                cursor: interactive ? "move" : "default",
+                userSelect: "none",
+                pointerEvents: "none",
+              }}
+              {...((o as unknown as { richText?: string }).richText
+                ? { dangerouslySetInnerHTML: { __html: (o as unknown as { richText?: string }).richText as string } }
+                : { children: o.text })}
+            />
+          )}
         </foreignObject>
         {selected && <SelectionRect x={o.x} y={o.y} w={w} h={h} />}
       </g>
@@ -3287,11 +3354,9 @@ function ObjectNode({
       <g
         {...common}
         color={stroke}
-        onClick={(e) => {
-          if (isDoubleInteraction(o.id)) {
-            e.stopPropagation();
-            onStartEdit?.();
-          }
+        onDoubleClick={(e) => {
+          e.stopPropagation();
+          onStartEdit?.();
         }}
       >
         {(o.arrowEnd || o.arrowStart) && (
@@ -3326,10 +3391,12 @@ function ObjectNode({
         {editing ? (
           <foreignObject x={labelX - 70} y={labelY - (ls.fontSize ?? 11) - 6} width={140} height={(ls.fontSize ?? 11) + 6}>
             <div
+              key={o.id}
+              ref={seedRichTextRef(o.labelRichText ?? escapeHtml(o.label ?? ""))}
               contentEditable
               suppressContentEditableWarning
               autoFocus
-              onBlur={(e) => onTextEdit(e.currentTarget.textContent ?? "")}
+              onBlur={(e) => onLabelEdit?.(e.currentTarget.textContent ?? "", e.currentTarget.innerHTML)}
               onPointerDown={(e) => e.stopPropagation()}
               onKeyDown={(e) => {
                 if (e.key === "Enter") { e.preventDefault(); (e.currentTarget as HTMLElement).blur(); }
@@ -3349,31 +3416,40 @@ function ObjectNode({
                 textAlign: "center",
                 outline: "none",
               }}
-            >
-              {o.label ?? ""}
-            </div>
+            />
           </foreignObject>
         ) : showRelationshipLabels && o.label && (() => {
           const angle = (Math.atan2(y2 - y1, x2 - x1) * 180) / Math.PI;
           const rot = angle > 90 || angle < -90 ? angle + 180 : angle;
           const fs = ls.fontSize ?? 11;
+          const boxW = (o.label.length * fs * 0.64) + 8;
+          const boxH = fs + 3;
           return (
             <g transform={`translate(${labelX} ${labelY})`} style={{ pointerEvents: "none" }}>
               <g transform={`rotate(${rot})`}>
-                <rect x={-((o.label.length * fs * 0.32) + 4)} y={-fs - 6} width={(o.label.length * fs * 0.64) + 8} height={fs + 3} rx={3} fill="white" fillOpacity={0.85} />
-                <text
-                  x={0}
-                  y={-6}
-                  textAnchor="middle"
-                  fill={o.labelColor ?? stroke}
-                  fontSize={fs}
-                  fontStyle={ls.italic ? "italic" : "normal"}
-                  fontWeight={ls.bold ? 700 : 400}
-                  textDecoration={ls.underline ? "underline" : undefined}
-                  style={{ userSelect: "none", textTransform: ls.textTransform ?? "none" }}
-                >
-                  {o.label}
-                </text>
+                <rect x={-boxW / 2} y={-boxH - 3} width={boxW} height={boxH} rx={3} fill="white" fillOpacity={0.85} />
+                <foreignObject x={-boxW / 2} y={-boxH - 3} width={boxW} height={boxH}>
+                  <div
+                    style={{
+                      width: "100%",
+                      height: "100%",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      fontSize: fs,
+                      fontStyle: ls.italic ? "italic" : "normal",
+                      fontWeight: ls.bold ? 700 : 400,
+                      textDecoration: ls.underline ? "underline" : undefined,
+                      textTransform: (ls.textTransform as React.CSSProperties["textTransform"]) ?? "none",
+                      color: o.labelColor ?? stroke,
+                      userSelect: "none",
+                      whiteSpace: "nowrap",
+                    }}
+                    {...(o.labelRichText
+                      ? { dangerouslySetInnerHTML: { __html: o.labelRichText } }
+                      : { children: o.label })}
+                  />
+                </foreignObject>
               </g>
             </g>
           );
