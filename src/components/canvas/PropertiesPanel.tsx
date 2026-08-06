@@ -162,14 +162,26 @@ export function PropertiesPanel({
       </div>
 
       {!multi && isText && "text" in object && (
-        <div className="space-y-2 mb-3">
-          <Label className="text-xs">Κείμενο</Label>
-          <VoiceField
-            value={(object as { text: string }).text ?? ""}
-            onChange={(v) => onChange({ text: v } as Partial<CanvasObject>)}
-            ariaLabel="Κείμενο"
-          />
-        </div>
+        <CollapsibleSection title="Περιεχόμενο" openSection={openSection} onOpenSection={setOpenSection}>
+          <div className="space-y-2">
+            <Label className="text-xs">Κείμενο</Label>
+            <VoiceField
+              value={(object as { text: string }).text ?? ""}
+              onChange={(v) => onChange({ text: v } as Partial<CanvasObject>)}
+              ariaLabel="Κείμενο"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label className="text-xs">{notesLabel}</Label>
+            <VoiceField
+              value={object.notes ?? ""}
+              onChange={(v) => onChange({ notes: v } as Partial<CanvasObject>)}
+              placeholder={notesPlaceholder}
+              rows={3}
+              ariaLabel={notesLabel}
+            />
+          </div>
+        </CollapsibleSection>
       )}
 
       {!multi && isShape && "text" in object && (
@@ -225,16 +237,76 @@ export function PropertiesPanel({
       )}
 
       {!multi && isFrame && (
-        <div className="space-y-2 mb-3">
-          <Label className="text-xs">Τίτλος πλαισίου</Label>
-          <VoiceField
-            singleLine
-            value={(object as { title?: string }).title ?? ""}
-            onChange={(v) => onChange({ title: v } as Partial<CanvasObject>)}
-            placeholder="π.χ. Ομάδα Α"
-            ariaLabel="Τίτλος πλαισίου"
-          />
-        </div>
+        <>
+          <CollapsibleSection title="Περιεχόμενο" openSection={openSection} onOpenSection={setOpenSection}>
+            <div className="space-y-2">
+              <Label className="text-xs">Τίτλος πλαισίου</Label>
+              <VoiceField
+                singleLine
+                value={(object as { title?: string }).title ?? ""}
+                onChange={(v) => onChange({ title: v } as Partial<CanvasObject>)}
+                placeholder="π.χ. Ομάδα Α"
+                ariaLabel="Τίτλος πλαισίου"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label className="text-xs">{notesLabel}</Label>
+              <VoiceField
+                value={object.notes ?? ""}
+                onChange={(v) => onChange({ notes: v } as Partial<CanvasObject>)}
+                placeholder={notesPlaceholder}
+                rows={3}
+                ariaLabel={notesLabel}
+              />
+            </div>
+          </CollapsibleSection>
+          <CollapsibleSection title="Περίγραμμα" defaultOpen={false} openSection={openSection} onOpenSection={setOpenSection}>
+            {(() => {
+              const fo = object as CanvasObject & { borderStyle?: BorderStyle; stroke?: string; strokeWidth?: number };
+              const fStyle = fo.borderStyle ?? "solid";
+              return (
+                <>
+                  <SwatchRow label="Χρώμα φόντου" value={fo.fill ?? "#FFFFFF"} onChange={(c) => onChange({ fill: c } as Partial<CanvasObject>)} />
+                  <SwatchRow label="Χρώμα περιγράμματος" value={fo.stroke ?? "#94A3B8"} onChange={(c) => onChange({ stroke: c } as Partial<CanvasObject>)} />
+                  <div>
+                    <Label className="text-xs mb-1.5 block">Τύπος περιγράμματος</Label>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {BORDER_STYLE_OPTIONS.map((b) => (
+                        <button
+                          key={b.kind}
+                          onClick={() => onChange({ borderStyle: b.kind } as Partial<CanvasObject>)}
+                          className={`h-8 rounded-md border text-[11px] transition-colors ${
+                            fStyle === b.kind
+                              ? "border-primary bg-primary/10 text-primary"
+                              : "border-border hover:bg-muted text-muted-foreground"
+                          }`}
+                        >
+                          {b.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <SliderRow
+                    label="Πάχος περιγράμματος"
+                    value={fo.strokeWidth ?? 1.5}
+                    min={0}
+                    max={12}
+                    step={0.5}
+                    onChange={(v) => onChange({ strokeWidth: v } as Partial<CanvasObject>)}
+                  />
+                  <SliderRow
+                    label="Αδιαφάνεια"
+                    value={Math.round((object.opacity ?? 1) * 100)}
+                    min={10}
+                    max={100}
+                    step={5}
+                    onChange={(v) => onChange({ opacity: v / 100 })}
+                  />
+                </>
+              );
+            })()}
+          </CollapsibleSection>
+        </>
       )}
 
       {!multi && isRelation && (
@@ -515,26 +587,69 @@ export function PropertiesPanel({
         </>
       )}
 
-      {!isShape && showFill && (
+      {!isShape && !isFrame && showFill && (
         <SwatchRow
           label="Γέμισμα"
           value={object.fill ?? "#FFFFFF"}
           onChange={(c) => onChange({ fill: c })}
         />
       )}
-      {!isShape && !isConnector && (
+
+      {(isSymbol || isDrawing) && (
+        <CollapsibleSection title="Στυλ" openSection={openSection} onOpenSection={setOpenSection}>
+          <SwatchRow
+            label={isDrawing ? "Χρώμα μολυβιού" : "Χρώμα"}
+            value={object.stroke ?? "#0F172A"}
+            onChange={(c) =>
+              onChange({ stroke: c, ...(isSymbol ? { color: c } : {}) } as Partial<CanvasObject>)
+            }
+          />
+          <SliderRow
+            label="Πάχος γραμμής"
+            value={object.strokeWidth ?? 1}
+            min={0}
+            max={12}
+            step={1}
+            onChange={(v) => onChange({ strokeWidth: v })}
+          />
+          <SliderRow
+            label="Αδιαφάνεια"
+            value={Math.round((object.opacity ?? 1) * 100)}
+            min={10}
+            max={100}
+            step={5}
+            onChange={(v) => onChange({ opacity: v / 100 })}
+          />
+        </CollapsibleSection>
+      )}
+      {(isSymbol || isDrawing) && (
+        <CollapsibleSection title="Περιεχόμενο" defaultOpen={false} openSection={openSection} onOpenSection={setOpenSection}>
+          <div className="space-y-2">
+            <Label className="text-xs">{notesLabel}</Label>
+            <VoiceField
+              value={object.notes ?? ""}
+              onChange={(v) => onChange({ notes: v } as Partial<CanvasObject>)}
+              placeholder={notesPlaceholder}
+              rows={3}
+              ariaLabel={notesLabel}
+            />
+          </div>
+        </CollapsibleSection>
+      )}
+
+      {!isShape && !isConnector && !isFrame && !isSymbol && !isDrawing && (
         <SwatchRow
-          label={isRelation ? "Χρώμα γραμμής" : isDrawing ? "Χρώμα μολυβιού" : "Περίγραμμα"}
+          label={isRelation ? "Χρώμα γραμμής" : "Περίγραμμα"}
           value={object.stroke ?? "#0F172A"}
           onChange={(c) =>
-            onChange({ stroke: c, ...(isSymbol ? { color: c } : {}) } as Partial<CanvasObject>)
+            onChange({ stroke: c } as Partial<CanvasObject>)
           }
         />
       )}
 
-      {!isShape && !isConnector && (
+      {!isShape && !isConnector && !isFrame && !isSymbol && !isDrawing && (
         <SliderRow
-          label={isRelation || isDrawing ? "Πάχος γραμμής" : "Πάχος περιγράμματος"}
+          label={isRelation ? "Πάχος γραμμής" : "Πάχος περιγράμματος"}
           value={object.strokeWidth ?? 1}
           min={0}
           max={12}
@@ -542,7 +657,7 @@ export function PropertiesPanel({
           onChange={(v) => onChange({ strokeWidth: v })}
         />
       )}
-      {!isShape && !isConnector && (
+      {!isShape && !isConnector && !isFrame && !isSymbol && !isDrawing && (
         <SliderRow
           label="Αδιαφάνεια"
           value={Math.round((object.opacity ?? 1) * 100)}
