@@ -1782,7 +1782,9 @@ export function CanvasStage({
       cy,
       startAngle,
       origRot,
-      ...(lineEndpoints ?? {}),
+      ...(lineEndpoints
+        ? { origX1: lineEndpoints.x1, origY1: lineEndpoints.y1, origX2: lineEndpoints.x2, origY2: lineEndpoints.y2 }
+        : {}),
     };
   };
 
@@ -3013,6 +3015,9 @@ function ObjectNode({
     );
   }
   if (o.type === "frame") {
+    const fBorderStyle = o.borderStyle ?? "solid";
+    const fSw = o.strokeWidth ?? 1.5;
+    const fDash = fBorderStyle === "dashed" ? "6 4" : fBorderStyle === "dotted" ? `0.1 ${fSw * 2.5}` : fBorderStyle === "dash-dot" ? `${fSw * 3} ${fSw * 2.5} 0.1 ${fSw * 2.5}` : undefined;
     return (
       <g {...common}>
         <rect
@@ -3021,9 +3026,10 @@ function ObjectNode({
           width={o.width}
           height={o.height}
           fill={o.fill ?? "transparent"}
-          stroke={o.stroke ?? "#94A3B8"}
-          strokeWidth={o.strokeWidth ?? 1.5}
-          strokeDasharray="6 4"
+          stroke={fBorderStyle === "none" ? "none" : o.stroke ?? "#94A3B8"}
+          strokeWidth={fSw}
+          strokeDasharray={fDash}
+          strokeLinecap={fBorderStyle === "dotted" ? "round" : undefined}
           rx={6}
         />
         {o.title && (
