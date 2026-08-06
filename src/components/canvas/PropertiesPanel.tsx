@@ -31,7 +31,8 @@ import {
   Paintbrush,
   ClipboardPaste,
 } from "lucide-react";
-import type { CanvasObject, ShapeKind, FillTextureKind, BorderStyle, PatternDensity, ConnectorObject } from "@/lib/canvas/types";
+import type { CanvasObject, ShapeKind, FillTextureKind, BorderStyle, PatternDensity, ConnectorObject, SymbolObject } from "@/lib/canvas/types";
+import { SYMBOL_KINDS_WITHOUT_FILL } from "./SymbolGlyph";
 import { VoiceField } from "./VoiceField";
 
 export type AlignMode = "left" | "right" | "center-h" | "top" | "bottom" | "center-v";
@@ -587,7 +588,7 @@ export function PropertiesPanel({
         </>
       )}
 
-      {!isShape && !isFrame && showFill && (
+      {!isShape && !isFrame && !isSymbol && !isDrawing && showFill && (
         <SwatchRow
           label="Γέμισμα"
           value={object.fill ?? "#FFFFFF"}
@@ -596,7 +597,28 @@ export function PropertiesPanel({
       )}
 
       {(isSymbol || isDrawing) && (
-        <CollapsibleSection title="Στυλ" openSection={openSection} onOpenSection={setOpenSection}>
+        <CollapsibleSection title="Περιεχόμενο" openSection={openSection} onOpenSection={setOpenSection}>
+          <div className="space-y-2">
+            <Label className="text-xs">{notesLabel}</Label>
+            <VoiceField
+              value={object.notes ?? ""}
+              onChange={(v) => onChange({ notes: v } as Partial<CanvasObject>)}
+              placeholder={notesPlaceholder}
+              rows={3}
+              ariaLabel={notesLabel}
+            />
+          </div>
+        </CollapsibleSection>
+      )}
+      {(isSymbol || isDrawing) && (
+        <CollapsibleSection title="Στυλ" defaultOpen={false} openSection={openSection} onOpenSection={setOpenSection}>
+          {isSymbol && !SYMBOL_KINDS_WITHOUT_FILL.has((object as SymbolObject).symbolKind) && (
+            <SwatchRow
+              label="Γέμισμα"
+              value={object.fill ?? "#FEF3C7"}
+              onChange={(c) => onChange({ fill: c } as Partial<CanvasObject>)}
+            />
+          )}
           <SwatchRow
             label={isDrawing ? "Χρώμα μολυβιού" : "Χρώμα"}
             value={object.stroke ?? "#0F172A"}
@@ -620,20 +642,6 @@ export function PropertiesPanel({
             step={5}
             onChange={(v) => onChange({ opacity: v / 100 })}
           />
-        </CollapsibleSection>
-      )}
-      {(isSymbol || isDrawing) && (
-        <CollapsibleSection title="Περιεχόμενο" defaultOpen={false} openSection={openSection} onOpenSection={setOpenSection}>
-          <div className="space-y-2">
-            <Label className="text-xs">{notesLabel}</Label>
-            <VoiceField
-              value={object.notes ?? ""}
-              onChange={(v) => onChange({ notes: v } as Partial<CanvasObject>)}
-              placeholder={notesPlaceholder}
-              rows={3}
-              ariaLabel={notesLabel}
-            />
-          </div>
         </CollapsibleSection>
       )}
 
@@ -918,17 +926,50 @@ export function PropertiesPanel({
         </div>
       )}
 
-      {/* Notes / info */}
-      {!multi && !isShape && !isRelation && (
+      {!multi && (
         <div className="mt-4 pt-3 border-t border-border">
-          <Label className="text-xs mb-1.5 block">{notesLabel}</Label>
-          <VoiceField
-            value={object.notes ?? ""}
-            onChange={(v) => onChange({ notes: v } as Partial<CanvasObject>)}
-            placeholder={notesPlaceholder}
-            rows={4}
-            ariaLabel={notesLabel}
-          />
+          <Button
+            variant="outline"
+            size="sm"
+            className="w-full text-xs text-muted-foreground"
+            onClick={() =>
+              onChange({
+                fill: undefined,
+                stroke: undefined,
+                strokeWidth: undefined,
+                opacity: undefined,
+                color: undefined,
+                textColor: undefined,
+                bold: undefined,
+                italic: undefined,
+                textTransform: undefined,
+                fillOpacity: undefined,
+                fillTexture: undefined,
+                fillTextureColor: undefined,
+                fillTextureDensity: undefined,
+                fillTextureOpacity: undefined,
+                borderStyle: undefined,
+                borderDashDensity: undefined,
+                borderOpacity: undefined,
+                dashed: undefined,
+                dotted: undefined,
+                wavy: undefined,
+                tickMarks: undefined,
+                dashDensity: undefined,
+                connectorStyle: undefined,
+                lightningIntensity: undefined,
+                labelColor: undefined,
+                labelStyle: undefined,
+                labelRichText: undefined,
+                richText: undefined,
+                routeType: undefined,
+                curved: undefined,
+                curveControl: undefined,
+              } as unknown as Partial<CanvasObject>)
+            }
+          >
+            Επαναφορά μορφοποίησης
+          </Button>
         </div>
       )}
     </aside>
