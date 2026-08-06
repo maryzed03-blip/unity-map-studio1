@@ -78,6 +78,12 @@ export interface ShapeObject extends BaseObject {
   type: "shape";
   shapeKind: ShapeKind;
   text?: string;
+  /** Rich (partially-formatted) HTML version of `text` — lets the user
+   *  select a few words and bold/italic/color just those, instead of the
+   *  whole label. When present, rendering uses this instead of plain
+   *  `text` + the flat bold/italic/textColor fields (those remain as the
+   *  starting defaults for brand-new text). */
+  richText?: string;
   fontSize?: number;
   borderRadius?: number;
   bold?: boolean;
@@ -131,6 +137,8 @@ export interface LineObject extends BaseObject {
   label?: string;
   /** Text color for the label — independent of the line's own stroke color. */
   labelColor?: string;
+  /** Rich (partially-formatted) HTML version of `label`. */
+  labelRichText?: string;
   /** Standalone lines can also carry a relationship value. */
   relationshipValue?: RelationshipValue;
   /** Stage 6: optional bend points between start and end. */
@@ -194,6 +202,8 @@ export interface ConnectorObject extends BaseObject {
   label?: string;
   /** Text color for the label — independent of the connector's own stroke color. */
   labelColor?: string;
+  /** Rich (partially-formatted) HTML version of `label`. */
+  labelRichText?: string;
   labelStyle?: { italic?: boolean; bold?: boolean; underline?: boolean; fontSize?: number; textTransform?: "none" | "uppercase" | "capitalize" };
   relationshipValue?: RelationshipValue;
   /** Stage 6: optional bend points between source and target. */
