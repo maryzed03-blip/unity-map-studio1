@@ -401,23 +401,6 @@ export function PropertiesPanel({
               );
             })()}
 
-          {/* Stage 6: bend points clear, when any exist */}
-          {(() => {
-            const bp = (object as { bendPoints?: Array<unknown> }).bendPoints;
-            if (!bp || bp.length === 0) return null;
-            return (
-              <div className="mb-3">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="w-full text-xs"
-                  onClick={() => onChange({ bendPoints: [] } as unknown as Partial<CanvasObject>)}
-                >
-                  Επαναφορά σε απλή γραμμή ({bp.length} σημεία)
-                </Button>
-              </div>
-            );
-          })()}
           {/* Stage 6.1: clear an explicit curve control back to the default bow. */}
           {(() => {
             const cc = (object as { curveControl?: { x: number; y: number } }).curveControl;
@@ -437,21 +420,6 @@ export function PropertiesPanel({
               </div>
             );
           })()}
-          {/* Stage 6.1: release a manually-set connector endpoint magnet. */}
-          {isConnector && (object as { magnetLocked?: boolean }).magnetLocked && (
-            <div className="mb-3">
-              <Button
-                variant="outline"
-                size="sm"
-                className="w-full text-xs"
-                onClick={() =>
-                  onChange({ magnetLocked: false } as unknown as Partial<CanvasObject>)
-                }
-              >
-                Αυτόματη επιλογή σημείου
-              </Button>
-            </div>
-          )}
           {/* Relationship value -5..+5 */}
           {(() => {
             const cur = (object as { relationshipValue?: number }).relationshipValue ?? 0;
