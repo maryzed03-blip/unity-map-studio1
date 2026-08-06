@@ -452,6 +452,38 @@ export function PropertiesPanel({
               </Button>
             </div>
           )}
+          {/* Relationship value -5..+5 */}
+          {(() => {
+            const cur = (object as { relationshipValue?: number }).relationshipValue ?? 0;
+            const label = cur > 0 ? `+${cur}` : cur < 0 ? `−${Math.abs(cur)}` : "0";
+            const color =
+              cur > 0 ? "text-green-600" : cur < 0 ? "text-red-600" : "text-muted-foreground";
+            return (
+              <CollapsibleSection title="Συντελεστής επίδρασης" defaultOpen={false} openSection={openSection} onOpenSection={setOpenSection}>
+                <div className="flex items-center justify-between mb-1.5">
+                  <Label className="text-xs">Συντελεστής επίδρασης</Label>
+                  <span className={`text-xs font-semibold tabular-nums ${color}`}>{label}</span>
+                </div>
+                <Slider
+                  value={[cur]}
+                  min={-5}
+                  max={5}
+                  step={1}
+                  onValueChange={([v]) =>
+                    onChange({ relationshipValue: v } as Partial<CanvasObject>)
+                  }
+                />
+                <div className="flex justify-between text-[10px] text-muted-foreground mt-1">
+                  <span>−5</span>
+                  <span>0</span>
+                  <span>+5</span>
+                </div>
+                <p className="text-[10px] text-muted-foreground mt-1">
+                  Θετικό = ενίσχυση · 0 = ουδέτερο · Αρνητικό = αντίθεση
+                </p>
+              </CollapsibleSection>
+            );
+          })()}
           {/* Path editing — lines and connectors alike. Two ways to
               hand-shape the line instead of picking from a preset list:
               a smooth curve-control point, or breaking it into draggable
@@ -504,38 +536,6 @@ export function PropertiesPanel({
                 </div>
               );
             })()}
-          {/* Relationship value -5..+5 */}
-          {(() => {
-            const cur = (object as { relationshipValue?: number }).relationshipValue ?? 0;
-            const label = cur > 0 ? `+${cur}` : cur < 0 ? `−${Math.abs(cur)}` : "0";
-            const color =
-              cur > 0 ? "text-green-600" : cur < 0 ? "text-red-600" : "text-muted-foreground";
-            return (
-              <CollapsibleSection title="Συντελεστής επίδρασης" defaultOpen={false} openSection={openSection} onOpenSection={setOpenSection}>
-                <div className="flex items-center justify-between mb-1.5">
-                  <Label className="text-xs">Συντελεστής επίδρασης</Label>
-                  <span className={`text-xs font-semibold tabular-nums ${color}`}>{label}</span>
-                </div>
-                <Slider
-                  value={[cur]}
-                  min={-5}
-                  max={5}
-                  step={1}
-                  onValueChange={([v]) =>
-                    onChange({ relationshipValue: v } as Partial<CanvasObject>)
-                  }
-                />
-                <div className="flex justify-between text-[10px] text-muted-foreground mt-1">
-                  <span>−5</span>
-                  <span>0</span>
-                  <span>+5</span>
-                </div>
-                <p className="text-[10px] text-muted-foreground mt-1">
-                  Θετικό = ενίσχυση · 0 = ουδέτερο · Αρνητικό = αντίθεση
-                </p>
-              </CollapsibleSection>
-            );
-          })()}
         </>
       )}
 
@@ -939,12 +939,20 @@ function CollapsibleSection({
     <details
       className="group mb-3 border border-border rounded-lg overflow-hidden"
       open={isOpen}
-      onToggle={(e) => {
-        const next = (e.currentTarget as HTMLDetailsElement).open;
-        onOpenSection(next ? title : null);
-      }}
     >
-      <summary className="flex items-center justify-between px-3 py-2 cursor-pointer select-none bg-muted/50 hover:bg-muted text-xs font-semibold uppercase tracking-wide text-muted-foreground [&::-webkit-details-marker]:hidden">
+      <summary
+        className="flex items-center justify-between px-3 py-2 cursor-pointer select-none bg-muted/50 hover:bg-muted text-xs font-semibold uppercase tracking-wide text-muted-foreground [&::-webkit-details-marker]:hidden"
+        onClick={(e) => {
+          // Fully React-controlled — prevent the native toggle entirely.
+          // Letting the browser toggle natively (and reacting via
+          // onToggle) caused a feedback loop: opening a new section
+          // programmatically closes the old one, which ALSO fires its
+          // own native toggle event, which was overwriting the just-set
+          // "new section is open" state back to null — closing everything.
+          e.preventDefault();
+          onOpenSection(isOpen ? null : title);
+        }}
+      >
         {title}
         <ChevronDown className="h-3.5 w-3.5 transition-transform group-open:rotate-180" />
       </summary>
