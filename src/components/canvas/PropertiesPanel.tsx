@@ -49,6 +49,9 @@ interface Props {
   onSendToBack?: () => void;
   onAlign?: (mode: AlignMode) => void;
   onDistribute?: (axis: "h" | "v") => void;
+  onDistributeGap?: (axis: "h" | "v", gapPx: number) => void;
+  onResetPositions?: () => void;
+  hasPositionSnapshot?: boolean;
   onGroup?: () => void;
   onUngroup?: () => void;
   onLockToggle?: () => void;
@@ -98,6 +101,9 @@ export function PropertiesPanel({
   onSendToBack,
   onAlign,
   onDistribute,
+  onDistributeGap,
+  onResetPositions,
+  hasPositionSnapshot,
   onGroup,
   onUngroup,
   onLockToggle,
@@ -107,6 +113,8 @@ export function PropertiesPanel({
   onSegmentPath,
 }: Props) {
   const [openSection, setOpenSectionState] = useState<string | null>(() => globalOpenSection);
+  const [gapAxis, setGapAxis] = useState<"h" | "v">("h");
+  const [gapValue, setGapValue] = useState<number>(20);
   const setOpenSection = (title: string | null) => {
     globalOpenSection = title;
     setOpenSectionState(title);
@@ -922,6 +930,53 @@ export function PropertiesPanel({
                 </AlignBtn>
               </div>
             </>
+          )}
+          {onDistributeGap && selectionCount >= 2 && (
+            <div className="mt-3">
+              <div className="flex items-center justify-between mb-1.5">
+                <Label className="text-xs">Απόσταση μεταξύ τους</Label>
+                <div className="flex rounded-md border border-border overflow-hidden">
+                  <button
+                    className={`px-1.5 py-0.5 text-[10px] ${gapAxis === "h" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
+                    onClick={() => setGapAxis("h")}
+                  >
+                    Οριζ.
+                  </button>
+                  <button
+                    className={`px-1.5 py-0.5 text-[10px] ${gapAxis === "v" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
+                    onClick={() => setGapAxis("v")}
+                  >
+                    Καθ.
+                  </button>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="range"
+                  min={-20}
+                  max={200}
+                  step={1}
+                  value={gapValue}
+                  onChange={(e) => {
+                    const v = Number(e.target.value);
+                    setGapValue(v);
+                    onDistributeGap(gapAxis, v);
+                  }}
+                  className="flex-1 h-1.5 accent-primary cursor-pointer"
+                />
+                <span className="text-xs tabular-nums w-9 text-center text-muted-foreground">{gapValue}px</span>
+              </div>
+            </div>
+          )}
+          {hasPositionSnapshot && onResetPositions && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-full text-xs mt-3"
+              onClick={onResetPositions}
+            >
+              Επαναφορά αρχικής θέσης
+            </Button>
           )}
         </div>
       )}
