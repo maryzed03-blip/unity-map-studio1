@@ -64,44 +64,63 @@ export function sampleQuadraticBezier(
   return pts;
 }
 
+/** Arc-length-parametrized point + local perpendicular unit vector at
+ *  fractional distance `t` (0..1) along a polyline. Shared by all the
+ *  "follow the actual path" style helpers (lightning, wavy, tick marks)
+ *  so a curved base path and a straight one produce identical density/
+ *  amplitude — only the shape of the path differs, not the styling. */
+export function pointAlong(pts: Point[], t: number): { x: number; y: number; px: number; py: number } {
+  if (pts.length < 2) return { x: pts[0]?.x ?? 0, y: pts[0]?.y ?? 0, px: 0, py: 1 };
+  const segLens: number[] = [];
+  let total = 0;
+  for (let i = 1; i < pts.length; i++) {
+    const l = Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+    segLens.push(l);
+    total += l;
+  }
+  const target = Math.max(0, Math.min(1, t)) * total;
+  let acc = 0;
+  for (let i = 0; i < segLens.length; i++) {
+    const segLen = segLens[i] || 1;
+    if (acc + segLen >= target || i === segLens.length - 1) {
+      const localT = Math.max(0, Math.min(1, (target - acc) / segLen));
+      const a = pts[i], b = pts[i + 1];
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const len = Math.hypot(dx, dy) || 1;
+      return { x: a.x + dx * localT, y: a.y + dy * localT, px: -dy / len, py: dx / len };
+    }
+    acc += segLen;
+  }
+  const last = pts[pts.length - 1];
+  return { x: last.x, y: last.y, px: 0, py: 1 };
+}
+
 export function lightningPath(points: Point[], intensity = 4): string {
   if (points.length < 2) return polylinePath(points);
-  const segs: Point[] = [];
-  const segCount = points.length - 1;
-  for (let i = 0; i < segCount; i++) {
-    const a = points[i];
-    const b = points[i + 1];
-    const dx = b.x - a.x;
-    const dy = b.y - a.y;
-    const len = Math.hypot(dx, dy) || 1;
-    // unit perpendicular
-    const px = -dy / len;
-    const py = dx / len;
-    // Number of deflections proportional to intensity and segment length
-    // intensity=4 → ~1 zigzag per 50px; density stays constant as line grows
-    const numZigzags = Math.max(1, Math.round((len / 100) * intensity * 2));
-    const mag = Math.max(2, Math.min(8, len * 0.06));
-    const isFirstSeg = i === 0;
-    const isLastSeg = i === segCount - 1;
-    segs.push(a);
-    for (let j = 1; j <= numZigzags; j++) {
-      const t = j / (numZigzags + 1);
-      const sign = j % 2 === 0 ? 1 : -1;
-      // Skip waypoints entirely within a short straight "lead-in/out" near
-      // the very start of the first segment and the very end of the last
-      // one — the arrowhead (oriented along the path's local tangent right
-      // at the endpoint) then points cleanly at the target instead of
-      // whatever random angle the last zigzag happened to be.
-      const LEAD = 0.18;
-      if (isFirstSeg && t < LEAD) continue;
-      if (isLastSeg && t > 1 - LEAD) continue;
-      segs.push({
-        x: a.x + dx * t + px * mag * sign,
-        y: a.y + dy * t + py * mag * sign,
-      });
-    }
+  let total = 0;
+  for (let i = 1; i < points.length; i++) total += Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y);
+  // Number of deflections proportional to intensity and TOTAL length —
+  // computed once for the whole path, not per-segment, so a curved path
+  // (sampled into several short segments) zigzags exactly the same as a
+  // straight one of the same overall length.
+  const numZigzags = Math.max(1, Math.round((total / 100) * intensity * 2));
+  const mag = Math.max(2, Math.min(8, total * 0.06));
+  // Short straight "lead-in/out" near each end so the arrowhead (oriented
+  // along the path's local tangent right at the endpoint) points cleanly
+  // at the target instead of whatever random angle the last zigzag
+  // happened to be.
+  const LEAD = 0.18;
+  const first = pointAlong(points, 0);
+  const segs: Point[] = [{ x: first.x, y: first.y }];
+  for (let j = 1; j <= numZigzags; j++) {
+    const t = j / (numZigzags + 1);
+    if (t < LEAD || t > 1 - LEAD) continue;
+    const sign = j % 2 === 0 ? 1 : -1;
+    const p = pointAlong(points, t);
+    segs.push({ x: p.x + p.px * mag * sign, y: p.y + p.py * mag * sign });
   }
-  segs.push(points[points.length - 1]);
+  const last = points[points.length - 1];
+  segs.push({ x: last.x, y: last.y });
   return polylinePath(segs);
 }
 
