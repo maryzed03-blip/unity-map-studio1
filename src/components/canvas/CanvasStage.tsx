@@ -37,6 +37,7 @@ import {
   removeBendPoint,
   smoothPath,
   sampleQuadraticBezier,
+  pointAlong,
   type Rect,
 } from "@/lib/canvas/bend-points";
 import type { ToolId } from "@/lib/workspaces";
@@ -532,43 +533,6 @@ function seedRichTextRef(html: string) {
 }
 
 // ── Relationship line style helpers (dashed/dotted/wavy/tick-marks) ────
-
-/** Arc-length-parametrized helper: given a polyline `pts`, returns the
- *  position and local perpendicular unit vector at fractional distance
- *  `t` (0..1) along its total length. Used so "wavy"/"tick marks" can
- *  follow ANY base path — a straight line OR a curve pre-sampled into
- *  points — instead of only ever assuming a straight line between two
- *  endpoints. */
-function pointAlong(pts: { x: number; y: number }[], t: number): { x: number; y: number; px: number; py: number } {
-  if (pts.length < 2) return { x: pts[0]?.x ?? 0, y: pts[0]?.y ?? 0, px: 0, py: 1 };
-  const segLens: number[] = [];
-  let total = 0;
-  for (let i = 1; i < pts.length; i++) {
-    const l = Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
-    segLens.push(l);
-    total += l;
-  }
-  const target = Math.max(0, Math.min(1, t)) * total;
-  let acc = 0;
-  for (let i = 0; i < segLens.length; i++) {
-    const segLen = segLens[i] || 1;
-    if (acc + segLen >= target || i === segLens.length - 1) {
-      const localT = Math.max(0, Math.min(1, (target - acc) / segLen));
-      const a = pts[i], b = pts[i + 1];
-      const dx = b.x - a.x, dy = b.y - a.y;
-      const len = Math.hypot(dx, dy) || 1;
-      return {
-        x: a.x + dx * localT,
-        y: a.y + dy * localT,
-        px: -dy / len,
-        py: dx / len,
-      };
-    }
-    acc += segLen;
-  }
-  const last = pts[pts.length - 1];
-  return { x: last.x, y: last.y, px: 0, py: 1 };
-}
 
 /** Sine wave that follows the given base path (straight line OR curve
  *  sample points) via arc-length parametrization — used for the
