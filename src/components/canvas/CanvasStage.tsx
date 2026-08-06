@@ -114,6 +114,7 @@ function makeStickyNote(x: number, y: number): ShapeObject {
     ...baseObj(),
     type: "shape",
     shapeKind: "rounded-rectangle",
+    isSticky: true,
     x,
     y,
     width: 160,
@@ -3097,6 +3098,7 @@ function ObjectNode({
               ref={seedRichTextRef(o.richText ?? escapeHtml(o.text ?? ""))}
               contentEditable
               suppressContentEditableWarning
+              autoFocus
               onBlur={(e) => onTextEdit(e.currentTarget.textContent ?? "", e.currentTarget.innerHTML)}
               onPointerDown={(e) => e.stopPropagation()}
               onInput={(e) => {
@@ -3196,6 +3198,7 @@ function ObjectNode({
               ref={seedRichTextRef((o as unknown as { richText?: string }).richText ?? escapeHtml(o.text ?? ""))}
               contentEditable
               suppressContentEditableWarning
+              autoFocus
               onBlur={(e) => onTextEdit(e.currentTarget.textContent ?? "", e.currentTarget.innerHTML)}
               onPointerDown={(e) => e.stopPropagation()}
               style={{
