@@ -165,6 +165,8 @@ export interface SymbolObject extends BaseObject {
 export interface FrameObject extends BaseObject {
   type: "frame";
   title?: string;
+  /** Defaults to "solid" — was always hard-coded dashed before. */
+  borderStyle?: BorderStyle;
 }
 
 export interface DrawingObject extends BaseObject {
