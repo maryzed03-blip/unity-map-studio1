@@ -506,8 +506,12 @@ export function PropertiesPanel({
                       className="text-xs gap-1.5"
                       onClick={() =>
                         isConnector
-                          ? onChange({ routeType: "curved", curved: true } as Partial<CanvasObject>)
-                          : onChange({ lineKind: "curved" } as Partial<CanvasObject>)
+                          ? isCurvedNow
+                            ? onChange({ routeType: "straight", curved: false, curveControl: undefined } as unknown as Partial<CanvasObject>)
+                            : onChange({ routeType: "curved", curved: true, bendPoints: [] } as unknown as Partial<CanvasObject>)
+                          : isCurvedNow
+                            ? onChange({ lineKind: "straight", curveControl: undefined } as unknown as Partial<CanvasObject>)
+                            : onChange({ lineKind: "curved", bendPoints: [] } as unknown as Partial<CanvasObject>)
                       }
                     >
                       <Replace className="h-3.5 w-3.5" />
@@ -517,7 +521,11 @@ export function PropertiesPanel({
                       variant={hasSegments ? "default" : "outline"}
                       size="sm"
                       className="text-xs gap-1.5"
-                      onClick={() => onSegmentPath?.()}
+                      onClick={() =>
+                        hasSegments
+                          ? onChange({ bendPoints: [] } as unknown as Partial<CanvasObject>)
+                          : onSegmentPath?.()
+                      }
                     >
                       <Replace className="h-3.5 w-3.5" />
                       Κομμάτια
