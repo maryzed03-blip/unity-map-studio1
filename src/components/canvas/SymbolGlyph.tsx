@@ -1,13 +1,18 @@
 import type { SymbolObject } from "@/lib/canvas/types";
 
+/** Symbol kinds that are pure stroke-based icons with no fillable area —
+ *  the properties panel hides the "Γέμισμα" control for these. */
+export const SYMBOL_KINDS_WITHOUT_FILL = new Set(["loop", "process-arrow"]);
+
 /** Renders one of the symbol glyphs inside the object's bounding box. */
 export function SymbolGlyph({ o }: { o: SymbolObject }) {
   const { x, y, width: w, height: h } = o;
   const stroke = o.color ?? o.stroke ?? "#0F172A";
-  const fill = o.fill ?? "#FFFFFF";
+  const fill = o.fill ?? "#FEF3C7";
   const sw = o.strokeWidth ?? 2;
   const cx = x + w / 2,
     cy = y + h / 2;
+  const markerId = `sym-arrow-${o.id}`;
 
   switch (o.symbolKind) {
     case "thunderbolt":
@@ -18,9 +23,17 @@ export function SymbolGlyph({ o }: { o: SymbolObject }) {
       const d = `M ${px(13)} ${py(2)} L ${px(4)} ${py(14)} L ${px(11)} ${py(14)} L ${px(10)} ${py(22)} L ${px(20)} ${py(10)} L ${px(13)} ${py(10)} Z`;
       return (
         <g>
-          <path d={d} fill="#FEF3C7" stroke={stroke} strokeWidth={sw} strokeLinejoin="round" />
+          <path d={d} fill={fill} stroke={stroke} strokeWidth={sw} strokeLinejoin="round" />
           {o.symbolKind === "thunderbolt-bidi" && (
             <>
+              <defs>
+                <marker id={`${markerId}-s`} viewBox="0 0 10 10" refX="1" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                  <path d="M 10 0 L 0 5 L 10 10 z" fill={stroke} />
+                </marker>
+                <marker id={`${markerId}-e`} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                  <path d="M 0 0 L 10 5 L 0 10 z" fill={stroke} />
+                </marker>
+              </defs>
               <line
                 x1={x}
                 y1={cy}
@@ -28,7 +41,7 @@ export function SymbolGlyph({ o }: { o: SymbolObject }) {
                 y2={cy}
                 stroke={stroke}
                 strokeWidth={sw}
-                markerStart="url(#ums-arrow-start)"
+                markerStart={`url(#${markerId}-s)`}
               />
               <line
                 x1={x + w}
@@ -37,7 +50,7 @@ export function SymbolGlyph({ o }: { o: SymbolObject }) {
                 y2={cy}
                 stroke={stroke}
                 strokeWidth={sw}
-                markerEnd="url(#ums-arrow-end)"
+                markerEnd={`url(#${markerId}-e)`}
               />
             </>
           )}
@@ -68,6 +81,9 @@ export function SymbolGlyph({ o }: { o: SymbolObject }) {
       const perpY = Math.sin(tangent + Math.PI / 2) * headWidth;
       return (
         <g color={stroke}>
+          {/* Invisible full-bbox hit area — the arc+arrowhead alone leave
+              the center empty, making the icon hard to grab/select there. */}
+          <rect x={x} y={y} width={w} height={h} fill="transparent" stroke="none" />
           <path
             d={`M ${sx} ${sy} A ${r} ${r} 0 1 1 ${backX} ${backY}`}
             stroke={stroke}
@@ -86,6 +102,13 @@ export function SymbolGlyph({ o }: { o: SymbolObject }) {
       const midY = cy;
       return (
         <g color={stroke}>
+          {/* Invisible full-bbox hit area, same reason as "loop". */}
+          <rect x={x} y={y} width={w} height={h} fill="transparent" stroke="none" />
+          <defs>
+            <marker id={`${markerId}-e`} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill={stroke} />
+            </marker>
+          </defs>
           <line
             x1={x + 4}
             y1={midY}
@@ -93,7 +116,7 @@ export function SymbolGlyph({ o }: { o: SymbolObject }) {
             y2={midY}
             stroke={stroke}
             strokeWidth={sw * 1.5}
-            markerEnd="url(#ums-arrow-end)"
+            markerEnd={`url(#${markerId}-e)`}
           />
         </g>
       );
@@ -104,7 +127,7 @@ export function SymbolGlyph({ o }: { o: SymbolObject }) {
       const d = `M ${px(12)} ${py(2)} L ${px(22)} ${py(20)} L ${px(2)} ${py(20)} Z`;
       return (
         <g>
-          <path d={d} fill="#FEF3C7" stroke={stroke} strokeWidth={sw} strokeLinejoin="round" />
+          <path d={d} fill={fill} stroke={stroke} strokeWidth={sw} strokeLinejoin="round" />
           <text
             x={cx}
             y={y + h * 0.7}
