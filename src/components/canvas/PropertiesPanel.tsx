@@ -78,6 +78,17 @@ const SWATCHES = [
   "#8B5CF6",
 ];
 
+const STICKY_COLOR_PAIRS: Array<{ name: string; fill: string; stroke: string; text: string }> = [
+  { name: "Κίτρινο", fill: "#FEF3C7", stroke: "#F59E0B", text: "#78350F" },
+  { name: "Μπλε", fill: "#DBEAFE", stroke: "#3B82F6", text: "#1E3A8A" },
+  { name: "Ροζ", fill: "#FCE7F3", stroke: "#EC4899", text: "#831843" },
+  { name: "Πράσινο", fill: "#D1FAE5", stroke: "#10B981", text: "#064E3B" },
+  { name: "Μοβ", fill: "#EDE9FE", stroke: "#8B5CF6", text: "#4C1D95" },
+  { name: "Πορτοκαλί", fill: "#FFEDD5", stroke: "#F97316", text: "#7C2D12" },
+  { name: "Κόκκινο", fill: "#FEE2E2", stroke: "#EF4444", text: "#7F1D1D" },
+  { name: "Γκρι", fill: "#F1F5F9", stroke: "#64748B", text: "#1E293B" },
+];
+
 const SHAPE_KIND_OPTIONS: Array<{ kind: ShapeKind; label: string; Icon: typeof Square }> = [
   { kind: "rectangle", label: "Ορθογώνιο", Icon: Square },
   { kind: "rounded-rectangle", label: "Στρογγυλεμένο ορθογώνιο", Icon: Square },
@@ -689,7 +700,7 @@ export function PropertiesPanel({
           fill?: string; stroke?: string; strokeWidth?: number; opacity?: number;
           fillOpacity?: number; fillTexture?: FillTextureKind; fillTextureColor?: string; fillTextureDensity?: PatternDensity; fillTextureOpacity?: number;
           borderStyle?: BorderStyle; borderDashDensity?: PatternDensity; borderOpacity?: number;
-          width: number; height: number;
+          width: number; height: number; isSticky?: boolean;
         };
         const hasTexture = (so.fillTexture ?? "none") !== "none";
         const borderStyle = so.borderStyle ?? "solid";
@@ -698,6 +709,27 @@ export function PropertiesPanel({
         return (
           <>
             <CollapsibleSection title="Γέμισμα" defaultOpen={false} openSection={openSection} onOpenSection={setOpenSection}>
+              {so.isSticky && (
+                <div>
+                  <Label className="text-xs mb-1.5 block">Χρώμα σημείωσης</Label>
+                  <div className="grid grid-cols-4 gap-1.5">
+                    {STICKY_COLOR_PAIRS.map((p) => (
+                      <button
+                        key={p.name}
+                        title={p.name}
+                        onClick={() => onChange({ fill: p.fill, stroke: p.stroke, textColor: p.text } as Partial<CanvasObject>)}
+                        className={`h-9 rounded-md border-2 transition-colors ${
+                          so.fill === p.fill ? "border-primary" : "border-transparent"
+                        }`}
+                        style={{ backgroundColor: p.fill, boxShadow: `inset 0 0 0 2px ${p.stroke}` }}
+                      />
+                    ))}
+                  </div>
+                  <p className="text-[10px] text-muted-foreground mt-1.5">
+                    Το περίγραμμα ταιριάζει αυτόματα με το χρώμα.
+                  </p>
+                </div>
+              )}
               <SwatchRow label="Χρώμα γεμίσματος" value={so.fill ?? "#FFFFFF"} onChange={(c) => onChange({ fill: c })} />
               <SliderRow
                 label="Διαφάνεια χρώματος"
