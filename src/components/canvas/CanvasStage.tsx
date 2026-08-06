@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 import { ZoomIn, ZoomOut, Undo2, Redo2, Maximize2, Tag } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { PropertiesPanel } from "./PropertiesPanel";
@@ -1022,6 +1023,50 @@ export function CanvasStage({
 
   const groupSelected = useCallback(() => {
     if (selectedIds.length < 2) return;
+    const lockedIds = selectedIds.filter((id) => state.objects.find((o) => o.id === id)?.locked);
+    const unlockedIds = selectedIds.filter((id) => !lockedIds.includes(id));
+
+    if (lockedIds.length > 0 && unlockedIds.length >= 2) {
+      // Group everything that isn't locked right away — the locked ones
+      // stay out of the group unless the user explicitly chooses to
+      // unlock and include them via the toast action below.
+      const gid = `g_${newId()}`;
+      const set = new Set(unlockedIds);
+      commit((s) => ({
+        ...s,
+        objects: s.objects.map((o) =>
+          set.has(o.id) ? ({ ...o, groupId: gid, updatedAt: now() } as CanvasObject) : o,
+        ),
+      }));
+      toast(
+        lockedIds.length === 1
+          ? "1 κλειδωμένο στοιχείο δεν μπήκε στην ομάδα."
+          : `${lockedIds.length} κλειδωμένα στοιχεία δεν μπήκαν στην ομάδα.`,
+        {
+          action: {
+            label: "Ξεκλείδωμα & προσθήκη",
+            onClick: () => {
+              const allSet = new Set(selectedIds);
+              commit((s) => ({
+                ...s,
+                objects: s.objects.map((o) =>
+                  allSet.has(o.id)
+                    ? ({ ...o, locked: false, groupId: gid, updatedAt: now() } as CanvasObject)
+                    : o,
+                ),
+              }));
+              setSelectedIds(selectedIds);
+            },
+          },
+        },
+      );
+      return;
+    }
+    if (lockedIds.length > 0) {
+      // Not enough unlocked items left to form a group on their own.
+      toast.error("Τα περισσότερα επιλεγμένα στοιχεία είναι κλειδωμένα — ξεκλειδώστε τα πρώτα.");
+      return;
+    }
     const gid = `g_${newId()}`;
     const set = new Set(selectedIds);
     commit((s) => ({
@@ -1030,7 +1075,7 @@ export function CanvasStage({
         set.has(o.id) ? ({ ...o, groupId: gid, updatedAt: now() } as CanvasObject) : o,
       ),
     }));
-  }, [commit, selectedIds]);
+  }, [commit, selectedIds, state.objects]);
 
   const ungroupSelected = useCallback(() => {
     if (selectedIds.length === 0) return;
