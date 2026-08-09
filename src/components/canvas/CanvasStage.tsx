@@ -51,6 +51,10 @@ interface Props {
   onReady?: (api: {
     save: () => Promise<void>;
     appendObjects: (objs: CanvasObject[]) => void;
+    /** Replaces the entire board with an imported CanvasState (used by
+     *  "Εισαγωγή JSON") — distinct from appendObjects, which merges new
+     *  objects onto the existing board. */
+    replaceState: (next: CanvasState) => void;
   }) => void;
   /** Enable periodic poll-based remote merge for live/collab boards. */
   liveSync?: boolean;
@@ -847,6 +851,14 @@ export function CanvasStage({
           if (undoRef.current.length > 50) undoRef.current.shift();
           redoRef.current = [];
           return { ...prev, objects: [...prev.objects, ...objs] };
+        });
+      },
+      replaceState: (next: CanvasState) => {
+        setState((prev) => {
+          undoRef.current.push(prev);
+          if (undoRef.current.length > 50) undoRef.current.shift();
+          redoRef.current = [];
+          return next;
         });
       },
     });
