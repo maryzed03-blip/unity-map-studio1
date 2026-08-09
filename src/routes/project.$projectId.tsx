@@ -38,11 +38,11 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Send } from "lucide-react";
-import { exportPNG, exportSVG, exportJSON, exportPDF } from "@/lib/canvas/export";
+import { Send, Upload } from "lucide-react";
+import { exportPNG, exportSVG, exportJSON, exportPDF, importJSON } from "@/lib/canvas/export";
 import { mapStore } from "@/lib/canvas/storage";
 import { AIPanel } from "@/components/ai/AIPanel";
-import type { CanvasObject } from "@/lib/canvas/types";
+import type { CanvasObject, CanvasState } from "@/lib/canvas/types";
 import { subscribeActiveSession, subscribeGroupRooms, sendDesignToUser, findUserByEmail, type LiveSession, type GroupRoom } from "@/lib/live-sessions";
 import { getProject, createProjectFromObjects, subscribeCollabParticipants, saveMyCollabCopy, type Project } from "@/lib/projects";
 import { setCurrentCollabProject } from "@/lib/presence";
@@ -87,6 +87,7 @@ function Editor() {
   const saveApiRef = useRef<{
     save: () => Promise<void>;
     appendObjects: (o: CanvasObject[]) => void;
+    replaceState: (next: CanvasState) => void;
   } | null>(null);
   const [manualSaving, setManualSaving] = useState(false);
 
@@ -184,6 +185,7 @@ function Editor() {
 
   const [savingCollabCopy, setSavingCollabCopy] = useState(false);
   const [sendDialogOpen, setSendDialogOpen] = useState(false);
+  const importInputRef = useRef<HTMLInputElement>(null);
   const handleSaveMyCollabCopy = async () => {
     if (!user) return;
     setSavingCollabCopy(true);
@@ -334,6 +336,45 @@ function Editor() {
               {savingCollabCopy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
               Αποθήκευση στα Έργα μου
             </Button>
+          )}
+          {!readOnly && (
+            <>
+              <input
+                ref={importInputRef}
+                type="file"
+                accept="application/json,.json"
+                className="hidden"
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = "";
+                  if (!file) return;
+                  if (
+                    !window.confirm(
+                      "Η εισαγωγή θα αντικαταστήσει όλο το τρέχον σχέδιο με το περιεχόμενο του αρχείου. Μπορείτε να το αναιρέσετε (Ctrl+Z) αν χρειαστεί. Συνέχεια;",
+                    )
+                  ) {
+                    return;
+                  }
+                  try {
+                    const imported = await importJSON(file);
+                    saveApiRef.current?.replaceState(imported);
+                    toast.success("Το σχέδιο εισήχθη");
+                  } catch (err) {
+                    console.error(err);
+                    toast.error("Το αρχείο δεν είναι έγκυρο αντίγραφο JSON");
+                  }
+                }}
+              />
+              <Button
+                variant="ghost"
+                size="sm"
+                className="gap-1.5"
+                onClick={() => importInputRef.current?.click()}
+              >
+                <Upload className="h-4 w-4" />
+                Εισαγωγή
+              </Button>
+            </>
           )}
           {!!user && !readOnly && (
             <Button
