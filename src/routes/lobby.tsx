@@ -1198,6 +1198,7 @@ function ReceivedDesignsList() {
         user.uid,
         design.sourceProjectId,
         `${design.title} (από ${design.fromUserName})`,
+        { viewOnly: design.permission === "view", forcePersonalType: true },
       );
       await markDesignSaved(design.id);
       toast.success("Αποθηκεύτηκε στη βιβλιοθήκη σας");
@@ -1230,7 +1231,12 @@ function ReceivedDesignsList() {
       {designs.map((d) => (
         <Card key={d.id} className="panel-soft p-4 flex flex-col gap-3">
           <div className="min-w-0">
-            <p className="text-sm font-medium truncate">{d.title}</p>
+            <div className="flex items-center gap-1.5">
+              <p className="text-sm font-medium truncate">{d.title}</p>
+              <span className={`pill shrink-0 ${d.permission === "view" ? "bg-muted text-muted-foreground" : "bg-[color:var(--success)]/15 text-[color:var(--success)]"}`}>
+                {d.permission === "view" ? "Μόνο προβολή" : "Επεξεργάσιμο"}
+              </span>
+            </div>
             <p className="text-xs text-muted-foreground mt-0.5">
               Από {d.fromUserName}
             </p>
