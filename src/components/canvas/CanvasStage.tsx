@@ -736,6 +736,7 @@ export function CanvasStage({
       onSaveStatusChange?.("saving");
       try {
         await mapStore.save(mapId, state, { inline: liveSync });
+        lastHashRef.current = h;
         onSaveStatusChange?.("saved");
       } catch (e) {
         console.warn("Canvas autosave failed", e);
