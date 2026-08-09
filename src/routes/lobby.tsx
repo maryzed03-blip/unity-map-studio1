@@ -74,6 +74,7 @@ import {
 import { LiveClassButton } from "@/components/live/LiveClassButton";
 import { CollabLiveButton } from "@/components/live/CollabLiveButton";
 import { toast } from "sonner";
+import { NotificationBell } from "@/components/NotificationBell";
 import { formatDistanceToNow } from "date-fns";
 import { el } from "date-fns/locale";
 
@@ -139,7 +140,10 @@ function Lobby() {
           <h1 className="text-2xl font-semibold tracking-tight">{meta.title}</h1>
           <p className="text-sm text-muted-foreground mt-1">{meta.subtitle}</p>
         </div>
-        {meta.action}
+        <div className="flex items-center gap-2">
+          <NotificationBell />
+          {meta.action}
+        </div>
       </div>
 
       <TabContent tab={tab} isTeacher={isTeacher} />
@@ -1198,7 +1202,7 @@ function ReceivedDesignsList() {
         user.uid,
         design.sourceProjectId,
         `${design.title} (από ${design.fromUserName})`,
-        { viewOnly: design.permission === "view", forcePersonalType: true },
+        { viewOnly: design.permission === "view", forcePersonalType: true, isTeacherCorrection: !!design.isCorrection },
       );
       await markDesignSaved(design.id);
       toast.success("Αποθηκεύτηκε στη βιβλιοθήκη σας");
@@ -1229,13 +1233,21 @@ function ReceivedDesignsList() {
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
       {designs.map((d) => (
-        <Card key={d.id} className="panel-soft p-4 flex flex-col gap-3">
+        <Card
+          key={d.id}
+          className={`panel-soft p-4 flex flex-col gap-3 ${d.isCorrection ? "border-amber-300 bg-amber-50/60" : ""}`}
+        >
           <div className="min-w-0">
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1.5 flex-wrap">
               <p className="text-sm font-medium truncate">{d.title}</p>
               <span className={`pill shrink-0 ${d.permission === "view" ? "bg-muted text-muted-foreground" : "bg-[color:var(--success)]/15 text-[color:var(--success)]"}`}>
                 {d.permission === "view" ? "Μόνο προβολή" : "Επεξεργάσιμο"}
               </span>
+              {d.isCorrection && (
+                <span className="pill shrink-0 bg-amber-100 text-amber-800 border border-amber-300">
+                  Διόρθωση εργασίας
+                </span>
+              )}
             </div>
             <p className="text-xs text-muted-foreground mt-0.5">
               Από {d.fromUserName}
