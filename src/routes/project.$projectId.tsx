@@ -27,11 +27,22 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Send } from "lucide-react";
 import { exportPNG, exportSVG, exportJSON } from "@/lib/canvas/export";
 import { mapStore } from "@/lib/canvas/storage";
 import { AIPanel } from "@/components/ai/AIPanel";
 import type { CanvasObject } from "@/lib/canvas/types";
-import { subscribeActiveSession, subscribeGroupRooms, type LiveSession, type GroupRoom } from "@/lib/live-sessions";
+import { subscribeActiveSession, subscribeGroupRooms, sendDesignToUser, findUserByEmail, type LiveSession, type GroupRoom } from "@/lib/live-sessions";
 import { getProject, createProjectFromObjects, subscribeCollabParticipants, saveMyCollabCopy, type Project } from "@/lib/projects";
 import { setCurrentCollabProject } from "@/lib/presence";
 import { insertObjectsIntoBoard } from "@/lib/canvas/insert-into-board";
@@ -152,7 +163,9 @@ function Editor() {
   // like a group — everyone else (an invite hasn't been accepted yet) is
   // read-only. Any other project (personal/etc): always editable, same as
   // before this feature existed.
-  const readOnly = project?.projectType === "collaborative" && !isCollabParticipant && !isWorkspaceRoomBoard;
+  const readOnly =
+    project?.viewOnly === true ||
+    (project?.projectType === "collaborative" && !isCollabParticipant && !isWorkspaceRoomBoard);
 
   // Mark myself as "currently here" in real-time presence while I'm a
   // participant on this collaborative project's page — purely so the
@@ -169,6 +182,7 @@ function Editor() {
   }, [isCollabParticipant, projectId]);
 
   const [savingCollabCopy, setSavingCollabCopy] = useState(false);
+  const [sendDialogOpen, setSendDialogOpen] = useState(false);
   const handleSaveMyCollabCopy = async () => {
     if (!user) return;
     setSavingCollabCopy(true);
@@ -318,6 +332,17 @@ function Editor() {
             >
               {savingCollabCopy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
               Αποθήκευση στα Έργα μου
+            </Button>
+          )}
+          {!!user && !readOnly && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="gap-1.5"
+              onClick={() => setSendDialogOpen(true)}
+            >
+              <Send className="h-4 w-4" />
+              Αποστολή σε
             </Button>
           )}
           <DropdownMenu>
@@ -483,6 +508,16 @@ function Editor() {
         </div>
       </div>
       <QuotaWarningSurface />
+      {user && (
+        <SendProjectDialog
+          open={sendDialogOpen}
+          onOpenChange={setSendDialogOpen}
+          projectId={projectId}
+          projectTitle={project?.title ?? "Σχέδιο"}
+          fromUserId={user.uid}
+          fromUserName={user.displayName || user.email || "Χρήστης"}
+        />
+      )}
     </div>
   );
 }
@@ -492,5 +527,134 @@ function MobileCanvasNotice() {
     <div className="sm:hidden absolute top-2 left-2 right-2 z-20 panel-soft text-xs text-muted-foreground px-3 py-2 rounded-md bg-amber-50/95 border border-amber-200 text-amber-900">
       Ο πίνακας λειτουργεί καλύτερα σε μεγαλύτερη οθόνη (tablet ή desktop).
     </div>
+  );
+}
+
+function SendProjectDialog({
+  open,
+  onOpenChange,
+  projectId,
+  projectTitle,
+  fromUserId,
+  fromUserName,
+}: {
+  open: boolean;
+  onOpenChange: (o: boolean) => void;
+  projectId: string;
+  projectTitle: string;
+  fromUserId: string;
+  fromUserName: string;
+}) {
+  const [email, setEmail] = useState("");
+  const [permission, setPermission] = useState<"view" | "edit">("edit");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (open) {
+      setEmail("");
+      setPermission("edit");
+    }
+  }, [open]);
+
+  const submit = async () => {
+    const trimmed = email.trim();
+    if (!trimmed) return;
+    setBusy(true);
+    try {
+      const match = await findUserByEmail(trimmed);
+      if (!match) {
+        toast.error("Δεν βρέθηκε χρήστης με αυτό το email.");
+        return;
+      }
+      if (match.uid === fromUserId) {
+        toast.error("Δεν μπορείτε να στείλετε το σχέδιο στον εαυτό σας.");
+        return;
+      }
+      await sendDesignToUser({
+        fromUserId,
+        fromUserName,
+        toUserId: match.uid,
+        sourceProjectId: projectId,
+        sourceTitle: projectTitle,
+        permission,
+      });
+      toast.success(`Στάλθηκε στον/στην ${match.displayName}`);
+      onOpenChange(false);
+    } catch (e) {
+      console.error(e);
+      toast.error("Αποτυχία αποστολής");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Αποστολή σχεδίου σε</DialogTitle>
+          <DialogDescription>
+            Ο παραλήπτης θα λάβει το δικό του, ανεξάρτητο αντίγραφο — δεν επηρεάζεται το δικό σας.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4 py-2">
+          <div className="space-y-1.5">
+            <Label htmlFor="send-email">Email παραλήπτη</Label>
+            <Input
+              id="send-email"
+              type="email"
+              placeholder="onoma@example.com"
+              value={email}
+              autoFocus
+              onChange={(e) => setEmail(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") submit();
+              }}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Δικαίωμα πρόσβασης</Label>
+            <div className="grid grid-cols-2 gap-1.5">
+              <button
+                type="button"
+                onClick={() => setPermission("view")}
+                className={`h-9 rounded-md border text-xs transition-colors ${
+                  permission === "view"
+                    ? "border-primary bg-primary/10 text-primary"
+                    : "border-border hover:bg-muted text-muted-foreground"
+                }`}
+              >
+                Μόνο προβολή
+              </button>
+              <button
+                type="button"
+                onClick={() => setPermission("edit")}
+                className={`h-9 rounded-md border text-xs transition-colors ${
+                  permission === "edit"
+                    ? "border-primary bg-primary/10 text-primary"
+                    : "border-border hover:bg-muted text-muted-foreground"
+                }`}
+              >
+                Επεξεργάσιμο
+              </button>
+            </div>
+            <p className="text-[11px] text-muted-foreground">
+              {permission === "view"
+                ? "Θα μπορεί μόνο να το δει, όχι να το αλλάξει."
+                : "Θα μπορεί να το αποθηκεύσει και να το επεξεργαστεί ελεύθερα."}
+            </p>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Άκυρο
+          </Button>
+          <Button onClick={submit} disabled={busy || !email.trim()}>
+            {busy && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
+            Αποστολή
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
