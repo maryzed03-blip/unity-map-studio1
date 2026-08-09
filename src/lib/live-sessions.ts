@@ -603,6 +603,23 @@ export async function setEditPermission(
   });
 }
 
+// ── Find a user by email (for "Αποστολή σχεδίου σε") ────────────────────
+// Any signed-in user can read the users collection (see firestore.rules),
+// so this is a plain client-side query — no special backend needed.
+export async function findUserByEmail(
+  email: string,
+): Promise<{ uid: string; displayName: string } | null> {
+  const normalized = email.trim().toLowerCase();
+  if (!normalized) return null;
+  const snap = await cGetDocs(
+    query(collection(db(), "users"), where("email", "==", normalized)),
+  );
+  if (snap.empty) return null;
+  const d = snap.docs[0];
+  const data = d.data() as { displayName?: string };
+  return { uid: d.id, displayName: data.displayName ?? normalized };
+}
+
 // ── Send design to user ───────────────────────────────────────────────
 // Copies the board to the recipient's projects as a "received_design".
 
@@ -612,6 +629,10 @@ export async function sendDesignToUser(opts: {
   toUserId: string;
   sourceProjectId: string;
   sourceTitle: string;
+  /** "view" → recipient's own copy is locked to read-only.
+   *  "edit" → recipient's own copy is fully editable. Defaults to "edit"
+   *  for backward compatibility with older call sites. */
+  permission?: "view" | "edit";
 }): Promise<void> {
   // Record the share in a "receivedDesigns" collection for the recipient
   await cAddDoc(collection(db(), "receivedDesigns"), {
@@ -620,6 +641,7 @@ export async function sendDesignToUser(opts: {
     fromUserName: opts.fromUserName,
     sourceProjectId: opts.sourceProjectId,
     title: opts.sourceTitle,
+    permission: opts.permission ?? "edit",
     status: "pending",
     createdAt: serverTimestamp(),
   });
@@ -632,6 +654,7 @@ export interface ReceivedDesign {
   fromUserName: string;
   sourceProjectId: string;
   title: string;
+  permission?: "view" | "edit";
   status: "pending" | "saved";
   createdAt?: unknown;
 }
