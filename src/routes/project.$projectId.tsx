@@ -38,7 +38,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Send, Upload, Pencil, Check, X } from "lucide-react";
+import { Send, Upload, Pencil, Check, X, GraduationCap } from "lucide-react";
 import { exportPNG, exportSVG, exportJSON, exportPDF, importJSON } from "@/lib/canvas/export";
 import { mapStore } from "@/lib/canvas/storage";
 import { AIPanel } from "@/components/ai/AIPanel";
@@ -508,6 +508,13 @@ function Editor() {
         </div>
       </header>
 
+      {project.isTeacherCorrection && (
+        <div className="bg-amber-50 border-b border-amber-200 px-4 py-2 flex items-center gap-2 text-sm text-amber-900 shrink-0">
+          <GraduationCap className="h-4 w-4 shrink-0" />
+          Αυτή είναι διορθωμένη εργασία από τον/την εκπαιδευτικό.
+        </div>
+      )}
+
       <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
         {/* Global persistent tab bar */}
         <GlobalTabBar
@@ -720,12 +727,16 @@ function SendProjectDialog({
 }) {
   const [email, setEmail] = useState("");
   const [permission, setPermission] = useState<"view" | "edit">("edit");
+  const [isCorrection, setIsCorrection] = useState(false);
   const [busy, setBusy] = useState(false);
+  const { profile } = useAuth();
+  const isTeacher = profile?.role === "teacher" || profile?.role === "therapist";
 
   useEffect(() => {
     if (open) {
       setEmail("");
       setPermission("edit");
+      setIsCorrection(false);
     }
   }, [open]);
 
@@ -750,6 +761,7 @@ function SendProjectDialog({
         sourceProjectId: projectId,
         sourceTitle: projectTitle,
         permission,
+        isCorrection: isTeacher && isCorrection,
       });
       toast.success(`Στάλθηκε στον/στην ${match.displayName}`);
       onOpenChange(false);
@@ -817,6 +829,20 @@ function SendProjectDialog({
                 : "Θα μπορεί να το αποθηκεύσει και να το επεξεργαστεί ελεύθερα."}
             </p>
           </div>
+          {isTeacher && (
+            <label className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={isCorrection}
+                onChange={(e) => setIsCorrection(e.target.checked)}
+                className="mt-0.5"
+              />
+              <span className="text-xs text-amber-900">
+                <span className="font-medium">Διόρθωση εργασίας</span> — θα εμφανιστεί στον παραλήπτη
+                με κίτρινη επισήμανση ότι πρόκειται για διορθωμένη εργασία από τον/την εκπαιδευτικό.
+              </span>
+            </label>
+          )}
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
