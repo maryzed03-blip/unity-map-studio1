@@ -38,7 +38,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Send, Upload, Pencil } from "lucide-react";
+import { Send, Upload, Pencil, Check, X } from "lucide-react";
 import { exportPNG, exportSVG, exportJSON, exportPDF, importJSON } from "@/lib/canvas/export";
 import { mapStore } from "@/lib/canvas/storage";
 import { AIPanel } from "@/components/ai/AIPanel";
@@ -638,21 +638,42 @@ function EditableTitle({
   }
 
   if (editing) {
+    const cancel = () => {
+      setValue(title);
+      setEditing(false);
+    };
     return (
-      <input
-        autoFocus
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        onBlur={commit}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur();
-          if (e.key === "Escape") {
-            setValue(title);
-            setEditing(false);
-          }
-        }}
-        className="text-sm font-medium bg-transparent border-b border-primary outline-none min-w-0 w-40"
-      />
+      <div className="flex items-center gap-1">
+        <input
+          autoFocus
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onBlur={cancel}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") commit();
+            if (e.key === "Escape") cancel();
+          }}
+          className="text-sm font-medium bg-transparent border-b border-primary outline-none min-w-0 w-40"
+        />
+        <button
+          type="button"
+          title="Αποθήκευση τίτλου"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={commit}
+          className="shrink-0 h-6 w-6 flex items-center justify-center rounded hover:bg-muted text-[color:var(--success)]"
+        >
+          <Check className="h-4 w-4" />
+        </button>
+        <button
+          type="button"
+          title="Ακύρωση"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={cancel}
+          className="shrink-0 h-6 w-6 flex items-center justify-center rounded hover:bg-muted text-muted-foreground"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
     );
   }
 
