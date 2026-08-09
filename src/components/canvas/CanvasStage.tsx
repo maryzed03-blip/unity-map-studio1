@@ -2863,6 +2863,47 @@ function hasInfo(o: CanvasObject): boolean {
 }
 
 /** Small ⓘ badge rendered in SVG at top-right of an object. */
+// Shared canvas 2D context for accurate text measurement (word-wrap line
+// counting) — much more reliable than a fixed avg-character-width guess,
+// which badly undersized the info-badge tooltip box for longer text.
+let __measureCtx: CanvasRenderingContext2D | null = null;
+function measureCtx(): CanvasRenderingContext2D | null {
+  if (typeof document === "undefined") return null;
+  if (!__measureCtx) {
+    const c = document.createElement("canvas");
+    __measureCtx = c.getContext("2d");
+  }
+  return __measureCtx;
+}
+/** Wraps `text` into lines that fit within `maxWidth` at the given font
+ *  size, matching the same word-wrap behavior as the CSS the tooltip's
+ *  actual <div> uses. */
+function wrapTextToLines(text: string, maxWidth: number, fontSize: number): string[] {
+  const ctx = measureCtx();
+  if (!ctx) return [text];
+  ctx.font = `${fontSize}px sans-serif`;
+  const out: string[] = [];
+  for (const paragraph of text.split("\n")) {
+    if (!paragraph) {
+      out.push("");
+      continue;
+    }
+    const words = paragraph.split(/\s+/).filter(Boolean);
+    let current = "";
+    for (const word of words) {
+      const test = current ? `${current} ${word}` : word;
+      if (current && ctx.measureText(test).width > maxWidth) {
+        out.push(current);
+        current = word;
+      } else {
+        current = test;
+      }
+    }
+    if (current) out.push(current);
+  }
+  return out.length ? out : [""];
+}
+
 function InfoBadge({
   x,
   y,
@@ -2889,14 +2930,13 @@ function InfoBadge({
   if (relationshipValue !== undefined && relationshipValue !== 0)
     lines.push(`Τιμή: ${relationshipValue > 0 ? "+" : ""}${relationshipValue}`);
 
-  const TOOLTIP_W = 200;
+  const TOOLTIP_W = 220;
   const TOOLTIP_PAD = 8;
   const LINE_H = 15;
-  // Rough wrapped-line estimate (foreignObject can't auto-size a parent
-  // SVG rect, so we estimate ~2px/char at 11px font in the available width).
-  const charsPerLine = Math.max(10, Math.floor((TOOLTIP_W - TOOLTIP_PAD * 2) / 5.7));
+  const FONT_SIZE = 11;
+  const innerW = TOOLTIP_W - TOOLTIP_PAD * 2;
   const wrappedLineCount = lines.reduce(
-    (sum, line) => sum + Math.max(1, Math.ceil(line.length / charsPerLine)),
+    (sum, line) => sum + Math.max(1, wrapTextToLines(line, innerW, FONT_SIZE).length),
     0,
   );
   const tooltipH = wrappedLineCount * LINE_H + TOOLTIP_PAD * 2;
@@ -2914,7 +2954,7 @@ function InfoBadge({
       }}
     >
       {/* Badge circle */}
-      <circle cx={8} cy={8} r={8} fill={badgeColor} opacity={open ? 0.95 : 0.55} />
+      <circle cx={8} cy={8} r={8} fill={badgeColor} opacity={open ? 0.95 : 0.85} />
       <text
         x={8}
         y={8}
