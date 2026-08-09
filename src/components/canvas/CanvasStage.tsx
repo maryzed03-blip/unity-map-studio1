@@ -2904,6 +2904,20 @@ function wrapTextToLines(text: string, maxWidth: number, fontSize: number): stri
   return out.length ? out : [""];
 }
 
+/** Picks black or white text for readable contrast against any badge
+ *  background color — needed since the info-badge now matches the
+ *  shape's own color, which can be very light (white, pale sticky-note
+ *  colors, etc.) where a fixed white "i" becomes invisible. */
+function contrastTextColor(hex: string): string {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return "#FFFFFF";
+  const n = parseInt(m[1], 16);
+  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  // Perceived luminance (ITU-R BT.601)
+  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  return luminance > 0.6 ? "#1E293B" : "#FFFFFF";
+}
+
 function InfoBadge({
   x,
   y,
@@ -2953,8 +2967,9 @@ function InfoBadge({
         setOpen((v) => !v);
       }}
     >
-      {/* Badge circle */}
-      <circle cx={8} cy={8} r={8} fill={badgeColor} opacity={open ? 0.95 : 0.85} />
+      {/* Badge circle — thin border keeps it visible even against a
+          near-white canvas background, regardless of the fill color. */}
+      <circle cx={8} cy={8} r={8} fill={badgeColor} stroke="rgba(0,0,0,0.25)" strokeWidth={1} opacity={open ? 0.95 : 0.85} />
       <text
         x={8}
         y={8}
@@ -2962,7 +2977,7 @@ function InfoBadge({
         dominantBaseline="central"
         fontSize={10}
         fontWeight={700}
-        fill="#FFFFFF"
+        fill={contrastTextColor(badgeColor)}
         style={{ pointerEvents: "none", userSelect: "none" }}
       >
         i
