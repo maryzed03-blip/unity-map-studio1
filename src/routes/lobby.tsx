@@ -1251,9 +1251,9 @@ function ReceivedDesignsList() {
               {savingId === d.id ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
               ) : (
-                <Plus className="h-3.5 w-3.5" />
+                <FolderOpen className="h-3.5 w-3.5" />
               )}
-              Αποθήκευση
+              Άνοιγμα
             </Button>
           </div>
         </Card>
