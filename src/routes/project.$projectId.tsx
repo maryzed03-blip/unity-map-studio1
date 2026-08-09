@@ -13,6 +13,7 @@ import {
   FileImage,
   FileCode2,
   FileJson,
+  FileText,
 } from "lucide-react";
 import { toast } from "sonner";
 import { CanvasToolbar } from "@/components/canvas/Toolbar";
@@ -38,7 +39,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Send } from "lucide-react";
-import { exportPNG, exportSVG, exportJSON } from "@/lib/canvas/export";
+import { exportPNG, exportSVG, exportJSON, exportPDF } from "@/lib/canvas/export";
 import { mapStore } from "@/lib/canvas/storage";
 import { AIPanel } from "@/components/ai/AIPanel";
 import type { CanvasObject } from "@/lib/canvas/types";
@@ -378,6 +379,24 @@ function Editor() {
                 }}
               >
                 <FileCode2 className="h-4 w-4 mr-2" /> SVG διάνυσμα
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={async () => {
+                  try {
+                    const s = await mapStore.load(projectId);
+                    if (!s) {
+                      toast.error("Δεν υπάρχει αποθηκευμένη κατάσταση");
+                      return;
+                    }
+                    await exportPDF(s, project.title || "Χάρτης", `${project.title || "canvas"}.pdf`);
+                    toast.success("Εξήχθη PDF");
+                  } catch (e) {
+                    toast.error("Αποτυχία εξαγωγής PDF");
+                    console.error(e);
+                  }
+                }}
+              >
+                <FileText className="h-4 w-4 mr-2" /> PDF με πίνακα πληροφοριών
               </DropdownMenuItem>
               <DropdownMenuItem
                 onClick={async () => {
