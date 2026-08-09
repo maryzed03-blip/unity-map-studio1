@@ -63,6 +63,9 @@ export interface Project {
    *  Shown under the project title in the library so people can tell where
    *  an auto-saved draft came from. Absent for normal, manually-created projects. */
   originLabel?: string;
+  /** Set on a project received via "Αποστολή σχεδίου σε" with "Προβολή"
+   *  permission — the recipient's own copy, but locked to read-only. */
+  viewOnly?: boolean;
   /** When this copy was auto-saved (e.g. on leaving a room). Distinct from
    *  createdAt/updatedAt which track the underlying project doc lifecycle. */
   savedAt?: unknown;
@@ -317,15 +320,19 @@ export async function duplicateProject(
   ownerId: string,
   sourceProjectId: string,
   newTitle: string,
+  opts?: { viewOnly?: boolean; forcePersonalType?: boolean },
 ): Promise<string> {
   const state = await mapStore.load(sourceProjectId);
   const src = await getProject(sourceProjectId);
   const newId = await createProject(
     ownerId,
     newTitle,
-    src?.projectType ?? "personal",
+    opts?.forcePersonalType ? "personal" : src?.projectType ?? "personal",
     src?.workspaceType ?? "free-drawing",
   );
+  if (opts?.viewOnly) {
+    await cSetDoc(doc(db(), "projects", newId), { viewOnly: true }, { merge: true });
+  }
   if (state) {
     await mapStore.save(newId, state);
   }
