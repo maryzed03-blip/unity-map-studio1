@@ -38,7 +38,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Send, Upload } from "lucide-react";
+import { Send, Upload, Pencil } from "lucide-react";
 import { exportPNG, exportSVG, exportJSON, exportPDF, importJSON } from "@/lib/canvas/export";
 import { mapStore } from "@/lib/canvas/storage";
 import { AIPanel } from "@/components/ai/AIPanel";
@@ -313,7 +313,14 @@ function Editor() {
           </Button>
           <div className="h-5 w-px bg-border" />
           <div className="flex items-center gap-2 min-w-0">
-            <span className="text-sm font-medium truncate">{project.title}</span>
+            <EditableTitle
+              title={project.title}
+              readOnly={readOnly}
+              onSave={async (t) => {
+                const { renameProject } = await import("@/lib/projects");
+                await renameProject(projectId, t);
+              }}
+            />
             <span className="pill bg-muted text-muted-foreground">{workspaceLabel}</span>
             <span className={`pill ${saveTone}`}>{saveLabel}</span>
           </div>
@@ -587,6 +594,82 @@ function MobileCanvasNotice() {
     <div className="sm:hidden absolute top-2 left-2 right-2 z-20 panel-soft text-xs text-muted-foreground px-3 py-2 rounded-md bg-amber-50/95 border border-amber-200 text-amber-900">
       Ο πίνακας λειτουργεί καλύτερα σε μεγαλύτερη οθόνη (tablet ή desktop).
     </div>
+  );
+}
+
+function EditableTitle({
+  title,
+  readOnly,
+  onSave,
+}: {
+  title: string;
+  readOnly: boolean;
+  onSave: (t: string) => Promise<void>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(title);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!editing) setValue(title);
+  }, [title, editing]);
+
+  const commit = async () => {
+    const trimmed = value.trim();
+    setEditing(false);
+    if (!trimmed || trimmed === title) {
+      setValue(title);
+      return;
+    }
+    setSaving(true);
+    try {
+      await onSave(trimmed);
+    } catch (e) {
+      console.error(e);
+      toast.error("Αποτυχία μετονομασίας");
+      setValue(title);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (readOnly) {
+    return <span className="text-sm font-medium truncate">{title}</span>;
+  }
+
+  if (editing) {
+    return (
+      <input
+        autoFocus
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur();
+          if (e.key === "Escape") {
+            setValue(title);
+            setEditing(false);
+          }
+        }}
+        className="text-sm font-medium bg-transparent border-b border-primary outline-none min-w-0 w-40"
+      />
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => setEditing(true)}
+      className="group flex items-center gap-1.5 min-w-0"
+      title="Μετονομασία σχεδίου"
+    >
+      <span className="text-sm font-medium truncate">{title}</span>
+      {saving ? (
+        <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
+      ) : (
+        <Pencil className="h-3.5 w-3.5 shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
+      )}
+    </button>
   );
 }
 
