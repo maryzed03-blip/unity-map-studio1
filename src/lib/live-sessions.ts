@@ -633,6 +633,10 @@ export async function sendDesignToUser(opts: {
    *  "edit" → recipient's own copy is fully editable. Defaults to "edit"
    *  for backward compatibility with older call sites. */
   permission?: "view" | "edit";
+  /** Teacher-only: marks this as a graded/corrected assignment being
+   *  handed back — the recipient's copy shows a yellow "διόρθωση
+   *  εργασίας" banner instead of the generic "received design" framing. */
+  isCorrection?: boolean;
 }): Promise<void> {
   // Deterministic id (sourceProjectId_toUserId) instead of an auto-id —
   // lets the projects/snapshots security rules directly exists()-check
@@ -649,6 +653,7 @@ export async function sendDesignToUser(opts: {
       sourceProjectId: opts.sourceProjectId,
       title: opts.sourceTitle,
       permission: opts.permission ?? "edit",
+      isCorrection: !!opts.isCorrection,
       status: "pending",
       createdAt: serverTimestamp(),
     },
@@ -664,6 +669,7 @@ export interface ReceivedDesign {
   sourceProjectId: string;
   title: string;
   permission?: "view" | "edit";
+  isCorrection?: boolean;
   status: "pending" | "saved";
   createdAt?: unknown;
 }
