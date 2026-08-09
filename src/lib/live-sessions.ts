@@ -634,17 +634,26 @@ export async function sendDesignToUser(opts: {
    *  for backward compatibility with older call sites. */
   permission?: "view" | "edit";
 }): Promise<void> {
-  // Record the share in a "receivedDesigns" collection for the recipient
-  await cAddDoc(collection(db(), "receivedDesigns"), {
-    toUserId: opts.toUserId,
-    fromUserId: opts.fromUserId,
-    fromUserName: opts.fromUserName,
-    sourceProjectId: opts.sourceProjectId,
-    title: opts.sourceTitle,
-    permission: opts.permission ?? "edit",
-    status: "pending",
-    createdAt: serverTimestamp(),
-  });
+  // Deterministic id (sourceProjectId_toUserId) instead of an auto-id —
+  // lets the projects/snapshots security rules directly exists()-check
+  // this exact document to grant the recipient one-time read access to
+  // the source project, which they need in order to load and copy it.
+  // Also naturally de-dupes: sending the same project to the same
+  // person again just refreshes this one record.
+  await cSetDoc(
+    doc(db(), "receivedDesigns", `${opts.sourceProjectId}_${opts.toUserId}`),
+    {
+      toUserId: opts.toUserId,
+      fromUserId: opts.fromUserId,
+      fromUserName: opts.fromUserName,
+      sourceProjectId: opts.sourceProjectId,
+      title: opts.sourceTitle,
+      permission: opts.permission ?? "edit",
+      status: "pending",
+      createdAt: serverTimestamp(),
+    },
+    { merge: true },
+  );
 }
 
 export interface ReceivedDesign {
