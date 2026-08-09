@@ -24,7 +24,7 @@ import { toast } from "sonner";
 import { db } from "../firebase";
 import { cGetDoc, cSetDoc } from "../quota-guard";
 import { emptyCanvasState, type CanvasState } from "./types";
-import { deletePayload, loadPayload, savePayload } from "./payload-api";
+import { deletePayload, loadPayload } from "./payload-api";
 
 export interface MapStore {
   load(mapId: string, opts?: { inline?: boolean }): Promise<CanvasState | null>;
@@ -112,76 +112,37 @@ export class FirestoreMapStore implements MapStore {
     return { state: local, savedAt: 0 };
   }
 
-  async save(mapId: string, state: CanvasState, opts?: { inline?: boolean }): Promise<void> {
+  async save(mapId: string, state: CanvasState, _opts?: { inline?: boolean }): Promise<void> {
     // Always update the local fallback first so offline editing never loses data.
     await this.local.save(mapId, state);
 
-    if (opts?.inline) {
-      // Live sessions, workspace rooms, and group boards: store the full
-      // state directly in the Firestore doc. These boards are short-lived
-      // and read/written every couple of seconds by every participant —
-      // routing them through the external payload API (extra network hop,
-      // a shared bearer token, a third-party server) is unnecessary and,
-      // if that token/service isn't configured, makes multi-user sync
-      // silently do nothing (this was the actual bug: nobody ever saw
-      // anyone else's changes, in rooms OR live sessions, because THIS
-      // save path used to be identical to the solo/draft one below and
-      // would bail out before ever touching Firestore whenever the
-      // external API call failed).
-      try {
-        // Firestore's setDoc() throws on ANY undefined field value,
-        // anywhere in the object graph — one shape with an optional prop
-        // left as `undefined` (instead of omitted or null) is enough to
-        // make every single save silently fail from then on, which looks
-        // exactly like "live sync stopped working". JSON round-tripping
-        // is the simplest reliable way to strip undefined at every depth
-        // (JSON.stringify omits undefined-valued keys entirely).
-        const sanitized = JSON.parse(JSON.stringify(state)) as CanvasState;
-        await cSetDoc(
-          this.snapRef(mapId),
-          {
-            payload: sanitized,
-            // Clear any stale external-payload pointer so load() doesn't
-            // prefer an old external copy over this fresher inline one.
-            payloadRef: null,
-            payloadUrl: null,
-            schemaVersion: 1,
-            isCurrent: true,
-            savedAt: serverTimestamp(),
-          },
-          { merge: true },
-        );
-      } catch (e) {
-        console.warn("Inline live-board save failed", e);
-      }
-      return;
-    }
-
-    // Step 1: upload full JSON to the external API.
-    let result: Awaited<ReturnType<typeof savePayload>>;
+    // Always save directly into the Firestore doc (the old "inline" path,
+    // now used unconditionally). Previously, solo/draft boards went
+    // through an external payload API first — but if that service or its
+    // token wasn't configured, the save would silently only reach this
+    // device's localStorage, never Firestore. That's what caused boards
+    // to open completely empty for anyone else (a collaborator, or
+    // someone the project was sent to) even though the sender saw no
+    // error. Firestore's 1MB/doc limit is comfortably more than this
+    // app's typical canvas size, so there's no real downside to just
+    // always writing here directly.
     try {
-      result = await savePayload(state);
-    } catch (e) {
-      // Do NOT write a partial/broken metadata doc — leave Firestore alone
-      // and surface the failure. Local copy is still safe.
-      console.warn("External payload save failed (kept local copy)", e);
-      if (!cloudWarnedThisSession) {
-        cloudWarnedThisSession = true;
-        toast.error(
-          "Η αποθήκευση στο cloud δεν είναι διαθέσιμη. Οι αλλαγές αποθηκεύονται μόνο σε αυτή τη συσκευή.",
-        );
-      }
-      return;
-    }
-
-    // Step 2: write the lightweight metadata pointer in Firestore.
-    try {
+      // Firestore's setDoc() throws on ANY undefined field value,
+      // anywhere in the object graph — one shape with an optional prop
+      // left as `undefined` (instead of omitted or null) is enough to
+      // make every single save silently fail from then on, which looks
+      // exactly like "sync stopped working". JSON round-tripping is the
+      // simplest reliable way to strip undefined at every depth
+      // (JSON.stringify omits undefined-valued keys entirely).
+      const sanitized = JSON.parse(JSON.stringify(state)) as CanvasState;
       await cSetDoc(
         this.snapRef(mapId),
         {
-          payloadRef: result.payloadRef,
-          payloadUrl: result.payloadUrl,
-          payloadSize: result.size,
+          payload: sanitized,
+          // Clear any stale external-payload pointer so load() doesn't
+          // prefer an old external copy over this fresher inline one.
+          payloadRef: null,
+          payloadUrl: null,
           schemaVersion: 1,
           isCurrent: true,
           savedAt: serverTimestamp(),
@@ -193,10 +154,12 @@ export class FirestoreMapStore implements MapStore {
         toast.success("Η αποθήκευση στο cloud αποκαταστάθηκε.");
       }
     } catch (e) {
-      console.warn("Firestore metadata save failed (kept local copy)", e);
+      console.warn("Cloud save failed (kept local copy)", e);
       if (!cloudWarnedThisSession) {
         cloudWarnedThisSession = true;
-        toast.error("Η αποθήκευση στο cloud δεν είναι διαθέσιμη αυτή τη στιγμή.");
+        toast.error(
+          "Η αποθήκευση στο cloud δεν είναι διαθέσιμη. Οι αλλαγές αποθηκεύονται μόνο σε αυτή τη συσκευή.",
+        );
       }
     }
   }
