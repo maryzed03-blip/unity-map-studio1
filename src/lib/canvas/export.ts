@@ -206,8 +206,10 @@ export async function exportPDF(
   projectTitle: string,
   filename = "canvas.pdf",
 ) {
-  const [{ default: jsPDF }] = await Promise.all([import("jspdf")]);
-  await import("jspdf-autotable");
+  const [{ jsPDF }, { default: autoTable }] = await Promise.all([
+    import("jspdf"),
+    import("jspdf-autotable"),
+  ]);
 
   const doc = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
   const pageWidth = doc.internal.pageSize.getWidth();
@@ -271,8 +273,7 @@ export async function exportPDF(
   }
 
   if (rows.length > 0) {
-    // @ts-expect-error — autoTable is registered as a jsPDF prototype plugin by the import above
-    doc.autoTable({
+    autoTable(doc, {
       startY: cursorY,
       head: [["#", "Τύπος", "Ετικέτα / Κείμενο", "Σημειώσεις", "Λεπτομέρειες"]],
       body: rows,
