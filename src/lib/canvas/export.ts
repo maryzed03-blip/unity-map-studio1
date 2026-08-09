@@ -206,45 +206,63 @@ export async function exportPDF(
   projectTitle: string,
   filename = "canvas.pdf",
 ) {
-  const [{ jsPDF }, { default: autoTable }] = await Promise.all([
+  const [{ jsPDF }, { default: autoTable }, { NOTO_SANS_REGULAR_BASE64, NOTO_SANS_BOLD_BASE64 }] = await Promise.all([
     import("jspdf"),
     import("jspdf-autotable"),
+    import("./pdf-font"),
   ]);
 
   const doc = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
+  // jsPDF's built-in fonts (Helvetica etc.) only cover WinAnsi — Greek
+  // text renders as garbled symbols with them. Embed a Greek-covering
+  // font (subsetted Noto Sans) and use it for everything instead.
+  doc.addFileToVFS("NotoSans-Regular.ttf", NOTO_SANS_REGULAR_BASE64);
+  doc.addFont("NotoSans-Regular.ttf", "NotoSans", "normal");
+  doc.addFileToVFS("NotoSans-Bold.ttf", NOTO_SANS_BOLD_BASE64);
+  doc.addFont("NotoSans-Bold.ttf", "NotoSans", "bold");
+  doc.setFont("NotoSans", "normal");
+
   const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
   const margin = 40;
-
-  // ── Header ──
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(18);
-  doc.text(projectTitle || "Χάρτης", margin, 44);
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(10);
-  doc.setTextColor(120);
   const dateStr = new Date().toLocaleDateString("el-GR", { day: "2-digit", month: "2-digit", year: "numeric" });
-  doc.text(`Εξαγωγή: ${dateStr}`, margin, 60);
-  doc.setTextColor(0);
 
-  let cursorY = 82;
+  const drawHeader = () => {
+    doc.setFont("NotoSans", "bold");
+    doc.setFontSize(18);
+    doc.setTextColor(0);
+    doc.text(projectTitle || "Χάρτης", margin, 44);
+    doc.setFont("NotoSans", "normal");
+    doc.setFontSize(10);
+    doc.setTextColor(120);
+    doc.text(`Εξαγωγή: ${dateStr}`, margin, 60);
+    doc.setTextColor(0);
+  };
 
-  // ── Optional snapshot image, if the live canvas is on screen ──
+  // ── Page 1: title + a large, clear snapshot of the diagram ──
+  drawHeader();
   try {
     const svg = getCanvasSvg();
     if (svg) {
       const { source, width, height } = serializeSvgForRaster(svg);
-      const pngDataUrl = await svgSourceToPngDataUrl(source, width, height, 1.5, "#ffffff");
+      const pngDataUrl = await svgSourceToPngDataUrl(source, width, height, 2, "#ffffff");
+      const top = 82;
       const maxImgW = pageWidth - margin * 2;
-      const maxImgH = 220;
-      const ratio = Math.min(maxImgW / width, maxImgH / height, 1);
+      const maxImgH = pageHeight - top - margin;
+      const ratio = Math.min(maxImgW / width, maxImgH / height);
       const imgW = width * ratio;
       const imgH = height * ratio;
-      doc.addImage(pngDataUrl, "PNG", margin, cursorY, imgW, imgH);
-      cursorY += imgH + 20;
+      const imgX = margin + (maxImgW - imgW) / 2; // centered horizontally
+      doc.addImage(pngDataUrl, "PNG", imgX, top, imgW, imgH);
     }
   } catch (e) {
     console.warn("PDF snapshot image skipped", e);
   }
+
+  // ── Page 2: the info table ──
+  doc.addPage();
+  drawHeader();
+  const cursorY = 82;
 
   // ── Info table ──
   const byId = new Map(state.objects.map((o) => [o.id, o] as const));
@@ -278,7 +296,7 @@ export async function exportPDF(
       head: [["#", "Τύπος", "Ετικέτα / Κείμενο", "Σημειώσεις", "Λεπτομέρειες"]],
       body: rows,
       margin: { left: margin, right: margin },
-      styles: { font: "helvetica", fontSize: 9, cellPadding: 6, overflow: "linebreak" },
+      styles: { font: "NotoSans", fontSize: 9, cellPadding: 6, overflow: "linebreak" },
       headStyles: { fillColor: [59, 130, 246], textColor: 255, fontStyle: "bold" },
       alternateRowStyles: { fillColor: [248, 250, 252] },
       columnStyles: {
