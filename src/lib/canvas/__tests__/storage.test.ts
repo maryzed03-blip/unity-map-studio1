@@ -75,32 +75,31 @@ describe("FirestoreMapStore.loadWithMeta — dual-read", () => {
   });
 });
 
-describe("FirestoreMapStore.save — writes metadata, not payload", () => {
-  it("uploads to payload-api then writes pointer doc", async () => {
-    savePayloadMock.mockResolvedValueOnce({
-      payloadRef: "ref1",
-      payloadUrl: "https://x/ref1",
-      size: 99,
-    });
+describe("FirestoreMapStore.save — always writes directly to Firestore", () => {
+  it("writes the full payload directly to Firestore and never calls the external payload API", async () => {
+    cSetDocMock.mockResolvedValueOnce(undefined);
+    const state: CanvasState = { ...emptyCanvasState(), objects: [] };
+
+    const store = new FirestoreMapStore();
+    await store.save("m3", state);
+
+    expect(savePayloadMock).not.toHaveBeenCalled();
+    expect(cSetDocMock).toHaveBeenCalledTimes(1);
+    const written = cSetDocMock.mock.calls[0][1] as Record<string, unknown>;
+    expect(written.payload).toEqual(state);
+    expect(written.payloadRef).toBeNull();
+    expect(written.payloadUrl).toBeNull();
+  });
+
+  it("save never depends on the external payload API succeeding — it's not called at all", async () => {
+    savePayloadMock.mockRejectedValueOnce(new Error("external API unreachable"));
     cSetDocMock.mockResolvedValueOnce(undefined);
 
     const store = new FirestoreMapStore();
-    await store.save("m3", emptyCanvasState());
-
-    expect(savePayloadMock).toHaveBeenCalledTimes(1);
-    expect(cSetDocMock).toHaveBeenCalledTimes(1);
-    const written = cSetDocMock.mock.calls[0][1] as Record<string, unknown>;
-    expect(written.payloadRef).toBe("ref1");
-    expect(written.payloadUrl).toBe("https://x/ref1");
-    expect(written.payloadSize).toBe(99);
-    expect("payload" in written).toBe(false);
-  });
-
-  it("does NOT write firestore doc if external save fails", async () => {
-    savePayloadMock.mockRejectedValueOnce(new Error("boom"));
-    const store = new FirestoreMapStore();
     await store.save("m4", emptyCanvasState());
-    expect(cSetDocMock).not.toHaveBeenCalled();
+
+    expect(savePayloadMock).not.toHaveBeenCalled();
+    expect(cSetDocMock).toHaveBeenCalledTimes(1);
   });
 });
 
