@@ -26,6 +26,37 @@ function getCanvasSvg(): SVGSVGElement | null {
  *  compute styles), builds equivalent plain <text> elements, and swaps
  *  them into the clone at the same position/order. Only used for PNG;
  *  the SVG export keeps the richer foreignObject-based rendering. */
+let __exportMeasureCtx: CanvasRenderingContext2D | null = null;
+function exportWrapLines(text: string, maxWidth: number, font: string): string[] {
+  if (typeof document === "undefined") return [text];
+  if (!__exportMeasureCtx) {
+    __exportMeasureCtx = document.createElement("canvas").getContext("2d");
+  }
+  const ctx = __exportMeasureCtx;
+  if (!ctx) return [text];
+  ctx.font = font;
+  const out: string[] = [];
+  for (const paragraph of text.split("\n")) {
+    if (!paragraph) {
+      out.push("");
+      continue;
+    }
+    const words = paragraph.split(/\s+/).filter(Boolean);
+    let current = "";
+    for (const word of words) {
+      const test = current ? `${current} ${word}` : word;
+      if (current && ctx.measureText(test).width > maxWidth) {
+        out.push(current);
+        current = word;
+      } else {
+        current = test;
+      }
+    }
+    if (current) out.push(current);
+  }
+  return out.length ? out : [""];
+}
+
 function replaceForeignObjectsWithText(liveSvg: SVGSVGElement, clone: SVGSVGElement) {
   const liveFos = Array.from(liveSvg.querySelectorAll("foreignObject"));
   const cloneFos = Array.from(clone.querySelectorAll("foreignObject"));
@@ -50,16 +81,27 @@ function replaceForeignObjectsWithText(liveSvg: SVGSVGElement, clone: SVGSVGElem
     const align = cs?.textAlign;
     const anchor = align === "center" ? "middle" : align === "right" ? "end" : align === "left" ? "start" : "middle";
     const anchorX = anchor === "middle" ? x + w / 2 : anchor === "end" ? x + w : x;
-    const centerY = y + h / 2 + fontSize * 0.35;
+    const padding = 8; // matches the tooltip/label divs' own CSS padding
+    const lineHeight = fontSize * 1.35;
+    const wrapped = exportWrapLines(text, Math.max(10, w - padding * 2), `${fontStyle} ${fontWeight} ${fontSize}px sans-serif`);
     const textEl = document.createElementNS("http://www.w3.org/2000/svg", "text");
     textEl.setAttribute("x", String(anchorX));
-    textEl.setAttribute("y", String(centerY));
     textEl.setAttribute("text-anchor", anchor);
     textEl.setAttribute("font-size", String(fontSize));
     textEl.setAttribute("fill", color);
     textEl.setAttribute("font-weight", fontWeight);
     textEl.setAttribute("font-style", fontStyle);
-    textEl.textContent = text;
+    // Vertically center the whole wrapped block within the foreignObject's
+    // original box, same as it visually appeared live.
+    const blockH = wrapped.length * lineHeight;
+    const firstBaselineY = y + Math.max(fontSize, (h - blockH) / 2 + fontSize * 0.85);
+    wrapped.forEach((line, i) => {
+      const tspan = document.createElementNS("http://www.w3.org/2000/svg", "tspan");
+      tspan.setAttribute("x", String(anchorX));
+      tspan.setAttribute("y", String(firstBaselineY + i * lineHeight));
+      tspan.textContent = line;
+      textEl.appendChild(tspan);
+    });
     cloneFo.replaceWith(textEl);
   });
 }
