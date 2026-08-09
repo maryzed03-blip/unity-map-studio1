@@ -66,6 +66,9 @@ export interface Project {
   /** Set on a project received via "Αποστολή σχεδίου σε" with "Προβολή"
    *  permission — the recipient's own copy, but locked to read-only. */
   viewOnly?: boolean;
+  /** Set when a teacher sends this back marked as a graded/corrected
+   *  assignment — shown with a yellow banner in the editor. */
+  isTeacherCorrection?: boolean;
   /** When this copy was auto-saved (e.g. on leaving a room). Distinct from
    *  createdAt/updatedAt which track the underlying project doc lifecycle. */
   savedAt?: unknown;
@@ -320,7 +323,7 @@ export async function duplicateProject(
   ownerId: string,
   sourceProjectId: string,
   newTitle: string,
-  opts?: { viewOnly?: boolean; forcePersonalType?: boolean },
+  opts?: { viewOnly?: boolean; forcePersonalType?: boolean; isTeacherCorrection?: boolean },
 ): Promise<string> {
   const state = await mapStore.load(sourceProjectId);
   const src = await getProject(sourceProjectId);
@@ -330,8 +333,12 @@ export async function duplicateProject(
     opts?.forcePersonalType ? "personal" : src?.projectType ?? "personal",
     src?.workspaceType ?? "free-drawing",
   );
-  if (opts?.viewOnly) {
-    await cSetDoc(doc(db(), "projects", newId), { viewOnly: true }, { merge: true });
+  if (opts?.viewOnly || opts?.isTeacherCorrection) {
+    await cSetDoc(
+      doc(db(), "projects", newId),
+      { viewOnly: !!opts.viewOnly, isTeacherCorrection: !!opts.isTeacherCorrection },
+      { merge: true },
+    );
   }
   if (state) {
     await mapStore.save(newId, state);
