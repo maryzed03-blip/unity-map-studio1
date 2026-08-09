@@ -1052,6 +1052,8 @@ export function PropertiesPanel({
                 routeType: undefined,
                 curved: undefined,
                 curveControl: undefined,
+                bendPoints: undefined,
+                lineKind: "straight",
               } as unknown as Partial<CanvasObject>)
             }
           >
