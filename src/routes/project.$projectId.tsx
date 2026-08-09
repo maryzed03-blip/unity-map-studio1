@@ -477,6 +477,15 @@ function Editor() {
               }
               setManualSaving(true);
               try {
+                // If the user is mid-edit in a text/label field (contentEditable),
+                // that change only reaches React state on blur — without this,
+                // clicking Save right after typing (without first clicking away)
+                // would silently save the OLD content and report success anyway.
+                const active = document.activeElement as HTMLElement | null;
+                if (active && active.isContentEditable) {
+                  active.blur();
+                  await new Promise((r) => setTimeout(r, 60));
+                }
                 await saveApiRef.current.save();
                 toast.success("Αποθηκεύτηκε");
               } catch (e) {
