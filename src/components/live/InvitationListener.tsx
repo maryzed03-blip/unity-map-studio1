@@ -110,7 +110,10 @@ export function InvitationListener() {
                   const pid = await respondToInvitation(inv.id, true, user.uid);
                   deleteInvitation(inv.id).catch(() => {});
                   if (pid) navigate({ to: "/project/$projectId", params: { projectId: pid } });
-                } catch { toast.error("Αποτυχία αποδοχής"); }
+                } catch (e) {
+                  console.error("Accept collab invitation failed:", e);
+                  toast.error("Αποτυχία αποδοχής");
+                }
               },
             },
             cancel: {
@@ -134,7 +137,10 @@ export function InvitationListener() {
                 const sid = await respondToInvitation(inv.id, true, user.uid);
                 deleteInvitation(inv.id).catch(() => {});
                 if (sid) navigate({ to: "/live/$sessionId", params: { sessionId: sid } });
-              } catch { toast.error("Αποτυχία αποδοχής"); }
+              } catch (e) {
+                console.error("Accept invitation failed:", e);
+                toast.error("Αποτυχία αποδοχής");
+              }
             },
           },
           cancel: {
