@@ -178,7 +178,8 @@ export function NotificationBell() {
                             } else {
                               navigate({ to: "/lobby" });
                             }
-                          } catch {
+                          } catch (e) {
+                            console.error("Accept invitation failed:", e);
                             toast.error("Αποτυχία αποδοχής");
                           } finally {
                             setBusyId(null);
