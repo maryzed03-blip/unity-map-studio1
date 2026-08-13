@@ -1,6 +1,5 @@
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { useAuth } from "@/lib/auth-context";
-import { useEffect } from "react";
 import { InvitationListener } from "@/components/live/InvitationListener";
 import { LiveBroadcastListener } from "@/components/live/LiveBroadcastListener";
 import { QuotaWarningSurface } from "@/components/QuotaWarningSurface";
@@ -43,12 +42,6 @@ function studentNav(): NavItem[] {
       search: { tab: "collab" },
       label: "Συνεργατικά",
       icon: <Users className="h-4 w-4" />,
-    },
-    {
-      to: "/lobby",
-      search: { tab: "rooms" },
-      label: "Χώροι Εργασίας",
-      icon: <Map className="h-4 w-4" />,
     },
     {
       to: "/lobby",
@@ -99,12 +92,6 @@ function teacherNav(): NavItem[] {
     },
     {
       to: "/lobby",
-      search: { tab: "rooms" },
-      label: "Χώροι Εργασίας",
-      icon: <Map className="h-4 w-4" />,
-    },
-    {
-      to: "/lobby",
       search: { tab: "submissions" },
       label: "Υποβολές",
       icon: <Inbox className="h-4 w-4" />,
@@ -131,34 +118,6 @@ export function AppShell({ children }: { children: ReactNode }) {
   const isTeacher = profile?.role === "teacher" || profile?.role === "therapist";
   const items = isTeacher ? teacherNav() : studentNav();
   const currentTab = (location.search as { tab?: string })?.tab ?? "projects";
-
-  // Bootstrap the 10 workspace rooms once on app load (no-op if already exist)
-  useEffect(() => {
-    if (!user) return;
-    import("@/lib/workspaces-rooms").then(({ bootstrapRooms }) => {
-      bootstrapRooms(user.uid).catch((e) => console.warn("bootstrapRooms failed", e));
-    });
-  }, [user?.uid]);
-
-  // Auto-leave workspace rooms when browser tab closes
-  useEffect(() => {
-    if (!user) return;
-    const isTeacher = profile?.role === "teacher" || profile?.role === "therapist";
-    const handleUnload = () => {
-      // Use sendBeacon for reliable fire-and-forget on page close
-      import("@/lib/workspaces-rooms").then(({ leaveRoom, subscribeRooms }) => {
-        subscribeRooms((rooms) => {
-          rooms.forEach((room) => {
-            if (room.occupants.includes(user.uid) || (room.teacherOccupants ?? []).includes(user.uid)) {
-              leaveRoom(room.id, user.uid, !!isTeacher).catch(() => {});
-            }
-          });
-        });
-      });
-    };
-    window.addEventListener("beforeunload", handleUnload);
-    return () => window.removeEventListener("beforeunload", handleUnload);
-  }, [user?.uid, profile?.role]);
 
   return (
     <div className="min-h-screen flex w-full bg-background">
