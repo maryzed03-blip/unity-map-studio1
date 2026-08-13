@@ -170,7 +170,7 @@ function Editor() {
     setSavingCollabCopy(true);
     try {
       await saveMyCollabCopy(projectId, user.uid);
-      toast.success("Αποθηκεύτηκε στα Έργα μου");
+      toast.success("Αποθηκεύτηκε στα αρχεία σας");
     } catch {
       toast.error("Αποτυχία αποθήκευσης");
     } finally {
@@ -320,7 +320,7 @@ function Editor() {
               onClick={handleSaveMyCollabCopy}
             >
               {savingCollabCopy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-              Αποθήκευση στα Έργα μου
+              Αποθήκευση στα Αρχεία μου
             </Button>
           )}
           {!readOnly && (
@@ -479,7 +479,7 @@ function Editor() {
                     console.warn("Failed to mark project as saved", e),
                   );
                 }
-                toast.success("Αποθηκεύτηκε");
+                toast.success("Αποθηκεύτηκε στα αρχεία σας");
               } catch (e) {
                 console.error(e);
                 toast.error("Αποτυχία αποθήκευσης", {
@@ -788,7 +788,7 @@ function ImportLibraryDialog({
             </div>
           ) : projectsList.length === 0 ? (
             <p className="text-sm text-muted-foreground text-center py-8">
-              Δεν βρέθηκαν άλλα σχέδια στη βιβλιοθήκη σας.
+              Δεν βρέθηκαν άλλα σχέδια στα έργα σας.
             </p>
           ) : (
             projectsList.map((p) => (
