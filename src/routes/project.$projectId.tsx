@@ -38,7 +38,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Send, Upload, Pencil, Check, X, GraduationCap } from "lucide-react";
+import { Send, Upload, Pencil, Check, X, GraduationCap, FolderOpen } from "lucide-react";
 import { exportPNG, exportSVG, exportJSON, exportPDF, importJSON } from "@/lib/canvas/export";
 import { mapStore } from "@/lib/canvas/storage";
 import { AIPanel } from "@/components/ai/AIPanel";
@@ -137,28 +137,6 @@ function Editor() {
     return subscribeCollabParticipants(projectId, setCollabParticipantIds);
   }, [projectId, project?.projectType]);
 
-  // Is this board one of the public Χώρος Εργασίας boards? Checked directly
-  // against the live workspaceRooms collection (boardId), NOT a flag stored
-  // on the project doc — that flag requires owner-only write permission and
-  // may never get backfilled for rooms that already existed, silently
-  // leaving liveSync off. This check works for every signed-in user.
-  const [isWorkspaceRoomBoard, setIsWorkspaceRoomBoard] = useState(false);
-  useEffect(() => {
-    let alive = true;
-    let unsub: (() => void) | undefined;
-    import("@/lib/workspaces-rooms").then(({ subscribeRooms }) => {
-      if (!alive) return;
-      unsub = subscribeRooms((rooms) => {
-        if (!alive) return;
-        setIsWorkspaceRoomBoard(rooms.some((r) => r.boardId === projectId));
-      });
-    });
-    return () => {
-      alive = false;
-      unsub?.();
-    };
-  }, [projectId]);
-
   const { user } = useAuth();
   const isCollabParticipant = project?.projectType === "collaborative" && collabParticipantIds.includes(user?.uid ?? "");
   // A collaborative project: anyone in the participant list can co-edit,
@@ -167,7 +145,7 @@ function Editor() {
   // before this feature existed.
   const readOnly =
     project?.viewOnly === true ||
-    (project?.projectType === "collaborative" && !isCollabParticipant && !isWorkspaceRoomBoard);
+    (project?.projectType === "collaborative" && !isCollabParticipant);
 
   // Mark myself as "currently here" in real-time presence while I'm a
   // participant on this collaborative project's page — purely so the
@@ -186,6 +164,7 @@ function Editor() {
   const [savingCollabCopy, setSavingCollabCopy] = useState(false);
   const [sendDialogOpen, setSendDialogOpen] = useState(false);
   const importInputRef = useRef<HTMLInputElement>(null);
+  const [importLibraryOpen, setImportLibraryOpen] = useState(false);
   const handleSaveMyCollabCopy = async () => {
     if (!user) return;
     setSavingCollabCopy(true);
@@ -372,15 +351,22 @@ function Editor() {
                   }
                 }}
               />
-              <Button
-                variant="ghost"
-                size="sm"
-                className="gap-1.5"
-                onClick={() => importInputRef.current?.click()}
-              >
-                <Upload className="h-4 w-4" />
-                Εισαγωγή
-              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="sm" className="gap-1.5">
+                    <Upload className="h-4 w-4" />
+                    Εισαγωγή
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-56">
+                  <DropdownMenuItem onClick={() => importInputRef.current?.click()}>
+                    <Upload className="h-4 w-4 mr-2" /> Από αρχείο (.json)
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setImportLibraryOpen(true)}>
+                    <FolderOpen className="h-4 w-4 mr-2" /> Από τη βιβλιοθήκη μου
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </>
           )}
           {!!user && !readOnly && (
@@ -558,8 +544,8 @@ function Editor() {
                   onSaveStatusChange={tab.id === "main" ? setSaveState : undefined}
                   onReady={tab.id === "main" ? (api) => { saveApiRef.current = api; } : undefined}
                   onSelectionChange={tab.id === "main" ? handleSelectionChange : undefined}
-                  liveSync={tab.id === "main" ? (isCollabParticipant || isWorkspaceRoomBoard) : false}
-                  liveOwner={tab.id === "main" ? (isCollabParticipant || isWorkspaceRoomBoard) : false}
+                  liveSync={tab.id === "main" ? isCollabParticipant : false}
+                  liveOwner={tab.id === "main" ? isCollabParticipant : false}
                   readOnly={tab.id === "main" ? readOnly : false}
                 />
               </div>
@@ -599,6 +585,18 @@ function Editor() {
           projectTitle={project?.title ?? "Σχέδιο"}
           fromUserId={user.uid}
           fromUserName={user.displayName || user.email || "Χρήστης"}
+        />
+      )}
+      {user && (
+        <ImportLibraryDialog
+          open={importLibraryOpen}
+          onOpenChange={setImportLibraryOpen}
+          ownerId={user.uid}
+          currentProjectId={projectId}
+          onImport={(imported) => {
+            saveApiRef.current?.replaceState(imported);
+            toast.success("Το σχέδιο εισήχθη");
+          }}
         />
       )}
     </div>
@@ -707,6 +705,106 @@ function EditableTitle({
         <Pencil className="h-3.5 w-3.5 shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
       )}
     </button>
+  );
+}
+
+function ImportLibraryDialog({
+  open,
+  onOpenChange,
+  ownerId,
+  currentProjectId,
+  onImport,
+}: {
+  open: boolean;
+  onOpenChange: (o: boolean) => void;
+  ownerId: string;
+  currentProjectId: string;
+  onImport: (state: CanvasState) => void;
+}) {
+  const [projectsList, setProjectsList] = useState<Array<{ id: string; title: string }> | null>(null);
+  const [loadingId, setLoadingId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    setProjectsList(null);
+    (async () => {
+      const { subscribeMyProjects } = await import("@/lib/projects");
+      const unsub = subscribeMyProjects(ownerId, (list) => {
+        setProjectsList(
+          list
+            .filter((p) => p.id !== currentProjectId && p.status !== "archived")
+            .map((p) => ({ id: p.id, title: p.title })),
+        );
+      });
+      // One snapshot is enough for a picker dialog — stop listening right after.
+      setTimeout(() => unsub(), 3000);
+    })();
+  }, [open, ownerId, currentProjectId]);
+
+  const pick = async (id: string, title: string) => {
+    if (
+      !window.confirm(
+        `Η εισαγωγή του "${title}" θα αντικαταστήσει όλο το τρέχον σχέδιο. Μπορείτε να το αναιρέσετε (Ctrl+Z) αν χρειαστεί. Συνέχεια;`,
+      )
+    ) {
+      return;
+    }
+    setLoadingId(id);
+    try {
+      const state = await mapStore.load(id);
+      if (!state) {
+        toast.error("Το σχέδιο δεν έχει αποθηκευμένο περιεχόμενο");
+        return;
+      }
+      onImport(state);
+      onOpenChange(false);
+    } catch (e) {
+      console.error(e);
+      toast.error("Αποτυχία εισαγωγής");
+    } finally {
+      setLoadingId(null);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Εισαγωγή από τη βιβλιοθήκη μου</DialogTitle>
+          <DialogDescription>
+            Διάλεξε ένα από τα σχέδιά σου — το περιεχόμενό του θα αντικαταστήσει το τρέχον σχέδιο.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="max-h-80 overflow-y-auto space-y-1 py-2">
+          {projectsList === null ? (
+            <div className="flex items-center justify-center py-8 text-muted-foreground text-sm gap-2">
+              <Loader2 className="h-4 w-4 animate-spin" /> Φόρτωση…
+            </div>
+          ) : projectsList.length === 0 ? (
+            <p className="text-sm text-muted-foreground text-center py-8">
+              Δεν βρέθηκαν άλλα σχέδια στη βιβλιοθήκη σας.
+            </p>
+          ) : (
+            projectsList.map((p) => (
+              <button
+                key={p.id}
+                onClick={() => pick(p.id, p.title)}
+                disabled={loadingId !== null}
+                className="w-full flex items-center justify-between gap-2 px-3 py-2 rounded-md text-sm text-left hover:bg-muted transition-colors disabled:opacity-50"
+              >
+                <span className="truncate">{p.title}</span>
+                {loadingId === p.id && <Loader2 className="h-4 w-4 animate-spin shrink-0" />}
+              </button>
+            ))
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Κλείσιμο
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
