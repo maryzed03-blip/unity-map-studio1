@@ -11,7 +11,6 @@ import {
   Inbox,
   Send,
   Archive,
-  LibraryBig,
   GraduationCap,
   LogOut,
   Settings,
@@ -67,12 +66,6 @@ function studentNav(): NavItem[] {
       label: "Αρχείο",
       icon: <Archive className="h-4 w-4" />,
     },
-    {
-      to: "/lobby",
-      search: { tab: "library" },
-      label: "Βιβλιοθήκη",
-      icon: <LibraryBig className="h-4 w-4" />,
-    },
   ];
 }
 
@@ -101,12 +94,6 @@ function teacherNav(): NavItem[] {
       search: { tab: "students" },
       label: "Μαθητές",
       icon: <GraduationCap className="h-4 w-4" />,
-    },
-    {
-      to: "/lobby",
-      search: { tab: "library" },
-      label: "Βιβλιοθήκη",
-      icon: <LibraryBig className="h-4 w-4" />,
     },
   ];
 }
