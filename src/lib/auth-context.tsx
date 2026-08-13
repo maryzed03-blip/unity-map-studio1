@@ -129,26 +129,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const signOut = async () => {
-    // Auto-leave all workspace rooms before signing out
-    if (user) {
-      try {
-        const { subscribeRooms, leaveRoom } = await import("@/lib/workspaces-rooms");
-        const { getDoc, collection, getDocs, query, where } = await import("firebase/firestore");
-        const { db } = await import("@/lib/firebase");
-        const snap = await getDocs(query(collection(db(), "workspaceRooms")));
-        const isTeacher = profile?.role === "teacher" || profile?.role === "therapist";
-        await Promise.all(
-          snap.docs.map(async (d) => {
-            const data = d.data() as { occupants?: string[]; teacherOccupants?: string[] };
-            if (data.occupants?.includes(user.uid) || data.teacherOccupants?.includes(user.uid)) {
-              await leaveRoom(d.id, user.uid, isTeacher).catch(() => {});
-            }
-          })
-        );
-      } catch (e) {
-        console.warn("Failed to leave workspace rooms on signOut", e);
-      }
-    }
     stopPresence();
     // Clear persistent tabs on logout
     const { clearTabs } = await import("@/lib/tab-store");
