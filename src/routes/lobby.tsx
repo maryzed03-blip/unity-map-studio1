@@ -65,7 +65,6 @@ import {
   Mail,
 } from "lucide-react";
 import { sendCollabProjectInvitation, subscribeReceivedDesigns, markDesignSaved, type ReceivedDesign } from "@/lib/live-sessions";
-import { WorkspaceRoomsPanel } from "@/components/rooms/WorkspaceRoomsPanel";
 import { startCollabProject, subscribeMyCollabProjects } from "@/lib/projects";
 import {
   OnlineUsersPanel,
@@ -183,8 +182,6 @@ function tabMeta(
         title: "Επιστραφέντα",
         subtitle: "Εργασίες με σχόλια του εκπαιδευτικού — δείτε τι άλλαξε.",
       };
-    case "rooms":
-      return { title: "Χώροι Εργασίας", subtitle: "10 κοινοί χώροι για ατομική ή ομαδική εργασία. Μέχρι 5 άτομα ανά χώρο." };
     case "archive":
       return { title: "Αρχείο", subtitle: "Παλαιότερα έργα που έχετε αρχειοθετήσει." };
     case "library":
@@ -211,8 +208,6 @@ function TabContent({ tab, isTeacher }: { tab: string; isTeacher: boolean }) {
       return <LibraryComing />;
     case "students":
       return <OnlineUsersPanel />;
-    case "rooms":
-      return <WorkspaceRoomsLobby />;
     case "received":
       return <ReceivedDesignsList />;
     default:
@@ -1172,10 +1167,6 @@ function EmptyState({
       {cta && <div className="mt-5">{cta}</div>}
     </Card>
   );
-}
-
-function WorkspaceRoomsLobby() {
-  return <WorkspaceRoomsPanel />;
 }
 
 function ReceivedDesignsList() {
