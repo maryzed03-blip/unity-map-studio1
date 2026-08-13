@@ -59,7 +59,7 @@ export interface Project {
    *  copies to everyone — the lobby's "Συνεργατικό live" button ignores
    *  any project with this set. */
   collabFinalized?: boolean;
-  /** Human-readable origin, e.g. "Χώρος Εργασίας — Χώρος 3" or a group's name.
+  /** Human-readable origin, e.g. a live session or group's name.
    *  Shown under the project title in the library so people can tell where
    *  an auto-saved draft came from. Absent for normal, manually-created projects. */
   originLabel?: string;
@@ -72,10 +72,6 @@ export interface Project {
   /** When this copy was auto-saved (e.g. on leaving a room). Distinct from
    *  createdAt/updatedAt which track the underlying project doc lifecycle. */
   savedAt?: unknown;
-  /** True for the fixed set of public "Χώρος Εργασίας" boards (see
-   *  workspaces-rooms.ts). These are always multi-user — the editor route
-   *  must force liveSync on for them regardless of any liveSessions doc. */
-  isWorkspaceRoom?: boolean;
 }
 
 export async function createProject(
@@ -268,7 +264,6 @@ export function subscribeMyProjects(
       .map((d) => ({ id: d.id, ...d.data() }))
       .filter((p) => {
         if (p.projectType === "session_board") return false;
-        if ((p as { isWorkspaceRoom?: boolean }).isWorkspaceRoom) return false;
         if (p.projectType === "collaborative" && /^Χώρος \d+/.test(p.title ?? "")) return false;
         if ((p.title ?? "").startsWith("[LIVE]")) return false;
         return true;
