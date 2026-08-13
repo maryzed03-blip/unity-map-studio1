@@ -175,11 +175,10 @@ export function CollapsibleLivePanel({ children }: { children: React.ReactNode }
 }
 
 // ---------- GroupRoomsPanel — teacher-managed teams inside a live session ----------
-// Distinct from the public "Χώροι Εργασίας" (workspaces-rooms.ts). These teams
-// live only inside this one session (liveSessions/{id}/groupRooms) and are
-// meant for short-lived breakout collaboration, e.g. mirroring Zoom breakout
-// rooms. Both teacher and students can see who is in each team; students can
-// also join a team on their own without waiting for the teacher.
+// These teams live only inside this one session (liveSessions/{id}/groupRooms)
+// and are meant for short-lived breakout collaboration, e.g. mirroring Zoom
+// breakout rooms. Both teacher and students can see who is in each team;
+// students can also join a team on their own without waiting for the teacher.
 
 export function GroupRoomsPanel({
   session,
