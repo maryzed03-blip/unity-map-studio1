@@ -27,7 +27,7 @@ import {
 } from "./quota-guard";
 import { mapStore } from "./canvas/storage";
 
-export type ProjectStatus = "draft" | "active_collab" | "submitted" | "returned" | "archived";
+export type ProjectStatus = "draft" | "saved" | "active_collab" | "submitted" | "returned" | "archived";
 
 export type ProjectType = "personal" | "collaborative" | "session_board";
 
@@ -328,13 +328,16 @@ export async function duplicateProject(
     opts?.forcePersonalType ? "personal" : src?.projectType ?? "personal",
     src?.workspaceType ?? "free-drawing",
   );
-  if (opts?.viewOnly || opts?.isTeacherCorrection) {
-    await cSetDoc(
-      doc(db(), "projects", newId),
-      { viewOnly: !!opts.viewOnly, isTeacherCorrection: !!opts.isTeacherCorrection },
-      { merge: true },
-    );
-  }
+  await cSetDoc(
+    doc(db(), "projects", newId),
+    {
+      status: "saved",
+      ...(opts?.viewOnly || opts?.isTeacherCorrection
+        ? { viewOnly: !!opts.viewOnly, isTeacherCorrection: !!opts.isTeacherCorrection }
+        : {}),
+    },
+    { merge: true },
+  );
   if (state) {
     await mapStore.save(newId, state);
   }
