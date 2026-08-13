@@ -64,6 +64,7 @@ import {
   Check,
   Mail,
 } from "lucide-react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import { sendCollabProjectInvitation, subscribeReceivedDesigns, markDesignSaved, type ReceivedDesign } from "@/lib/live-sessions";
 import { startCollabProject, subscribeMyCollabProjects } from "@/lib/projects";
 import {
@@ -158,10 +159,9 @@ function tabMeta(
     case "projects":
       return {
         title: "Τα Έργα μου",
-        subtitle: "Προσωπικά πρόχειρα και ολοκληρωμένες εργασίες σας.",
+        subtitle: "Πρόχειρα που δεν έχετε αποθηκεύσει οριστικά ακόμα.",
         action: (
           <div className="flex items-center gap-2">
-            <NewFolderButton />
             <NewProjectButton />
             <LiveClassButton />
             <CollabLiveButton />
@@ -183,9 +183,11 @@ function tabMeta(
         subtitle: "Εργασίες με σχόλια του εκπαιδευτικού — δείτε τι άλλαξε.",
       };
     case "archive":
-      return { title: "Αρχείο", subtitle: "Παλαιότερα έργα που έχετε αρχειοθετήσει." };
-    case "library":
-      return { title: "Βιβλιοθήκη", subtitle: "Πρότυπα και έτοιμοι χάρτες για γρήγορη εκκίνηση." };
+      return {
+        title: "Αρχείο",
+        subtitle: "Σχέδια που έχετε αποθηκεύσει οριστικά, οργανωμένα σε φακέλους.",
+        action: <NewFolderButton />,
+      };
     case "received":
       return { title: "Απεσταλμένα από Συμμαθητές", subtitle: "Σχέδια που σας έχουν στείλει άλλοι χρήστες." };
     case "students":
@@ -204,8 +206,8 @@ function TabContent({ tab, isTeacher }: { tab: string; isTeacher: boolean }) {
       return <MyProjectsGrid />;
     case "collab":
       return <CollabProjectsList />;
-    case "library":
-      return <LibraryComing />;
+    case "archive":
+      return <ArchivePanel />;
     case "students":
       return <OnlineUsersPanel />;
     case "received":
@@ -217,18 +219,53 @@ function TabContent({ tab, isTeacher }: { tab: string; isTeacher: boolean }) {
 
 // ── Project library w/ folders ──────────────────────────────────────
 
-type FolderFilter = "all" | "unfiled" | string; // string = folderId
 
 function MyProjectsGrid() {
   const { user } = useAuth();
   const [projects, setProjects] = useState<Project[] | null>(null);
-  const [folders, setFolders] = useState<Folder[]>([]);
-  const [filter, setFilter] = useState<FolderFilter>("all");
 
   useEffect(() => {
     if (!user) return;
     const u1 = subscribeMyProjects(user.uid, (p) =>
-      setProjects(p.filter((x) => x.status !== "archived")),
+      setProjects(p.filter((x) => x.status === "draft" || !x.status)),
+    );
+    return () => u1();
+  }, [user]);
+
+  if (projects === null) {
+    return <SkeletonGrid />;
+  }
+
+  return (
+    <div className="space-y-5">
+      {projects.length === 0 ? (
+        <EmptyState
+          icon={<FolderOpen className="h-6 w-6" />}
+          title="Δεν έχετε πρόχειρα αυτή τη στιγμή"
+          description="Ό,τι δημιουργείτε ξεκινά εδώ σαν πρόχειρο. Μόλις πατήσετε «Αποθήκευση» μέσα σε ένα σχέδιο, μετακομίζει στο Αρχείο."
+          cta={<NewProjectButton />}
+        />
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
+          {projects.map((p) => (
+            <ProjectCard key={p.id} project={p} folders={[]} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ArchivePanel() {
+  const { user } = useAuth();
+  const [projects, setProjects] = useState<Project[] | null>(null);
+  const [folders, setFolders] = useState<Folder[]>([]);
+  const [openFolderId, setOpenFolderId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!user) return;
+    const u1 = subscribeMyProjects(user.uid, (p) =>
+      setProjects(p.filter((x) => x.status && x.status !== "draft" && x.status !== "archived")),
     );
     const u2 = subscribeMyFolders(user.uid, setFolders);
     return () => {
@@ -237,95 +274,99 @@ function MyProjectsGrid() {
     };
   }, [user]);
 
-  const visibleProjects = useMemo(() => {
-    if (!projects) return null;
-    if (filter === "all") return projects;
-    if (filter === "unfiled") return projects.filter((p) => !p.folderId);
-    return projects.filter((p) => p.folderId === filter);
-  }, [projects, filter]);
-
   if (projects === null) {
     return <SkeletonGrid />;
   }
 
-  const counts = {
-    all: projects.length,
-    unfiled: projects.filter((p) => !p.folderId).length,
-  };
-
-  return (
-    <div className="space-y-5">
-      <FolderChips
-        folders={folders}
-        projects={projects}
-        filter={filter}
-        setFilter={setFilter}
-        counts={counts}
-      />
-
-      {visibleProjects && visibleProjects.length === 0 ? (
-        <EmptyState
-          icon={<FolderOpen className="h-6 w-6" />}
-          title={filter === "all" ? "Δεν έχετε έργα ακόμα" : "Κενός φάκελος"}
-          description={
-            filter === "all"
-              ? "Δημιουργήστε το πρώτο σας έργο για να ξεκινήσετε."
-              : "Δεν υπάρχουν έργα σε αυτή την προβολή."
-          }
-          cta={filter === "all" ? <NewProjectButton /> : undefined}
-        />
-      ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
-          {visibleProjects!.map((p) => (
-            <ProjectCard key={p.id} project={p} folders={folders} />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function FolderChips({
-  folders,
-  projects,
-  filter,
-  setFilter,
-  counts,
-}: {
-  folders: Folder[];
-  projects: Project[];
-  filter: FolderFilter;
-  setFilter: (f: FolderFilter) => void;
-  counts: { all: number; unfiled: number };
-}) {
+  const unfiled = projects.filter((p) => !p.folderId);
   const countFor = (fid: string) => projects.filter((p) => p.folderId === fid).length;
+
+  // Drilled into one folder — show its projects with a way back.
+  if (openFolderId) {
+    const folder = folders.find((f) => f.id === openFolderId);
+    const inFolder = projects.filter((p) => p.folderId === openFolderId);
+    return (
+      <div className="space-y-5">
+        <button
+          onClick={() => setOpenFolderId(null)}
+          className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <ChevronLeft className="h-4 w-4" />
+          Πίσω στο Αρχείο
+        </button>
+        <div className="flex items-center gap-2">
+          <FolderIcon className="h-4 w-4 text-muted-foreground" />
+          <h2 className="text-sm font-medium">{folder?.name ?? "Φάκελος"}</h2>
+          {folder && <FolderMenu folder={folder} onAfterDelete={() => setOpenFolderId(null)} />}
+        </div>
+        {inFolder.length === 0 ? (
+          <EmptyState
+            icon={<FolderOpen className="h-6 w-6" />}
+            title="Κενός φάκελος"
+            description="Δεν έχετε αποθηκεύσει ακόμα κανένα σχέδιο εδώ."
+          />
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
+            {inFolder.map((p) => (
+              <ProjectCard key={p.id} project={p} folders={folders} />
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
-    <div className="flex flex-wrap gap-2">
-      <FolderChip
-        active={filter === "all"}
-        onClick={() => setFilter("all")}
-        icon={<LibraryBig className="h-3.5 w-3.5" />}
-        label="Όλα τα έργα"
-        count={counts.all}
-      />
-      <FolderChip
-        active={filter === "unfiled"}
-        onClick={() => setFilter("unfiled")}
-        icon={<FolderOpen className="h-3.5 w-3.5" />}
-        label="Χωρίς φάκελο"
-        count={counts.unfiled}
-      />
-      {folders.map((f) => (
-        <FolderChip
-          key={f.id}
-          active={filter === f.id}
-          onClick={() => setFilter(f.id)}
-          icon={<FolderIcon className="h-3.5 w-3.5" />}
-          label={f.name}
-          count={countFor(f.id)}
-          menu={<FolderMenu folder={f} onAfterDelete={() => setFilter("all")} />}
-        />
-      ))}
+    <div className="space-y-8">
+      <section className="space-y-3">
+        <h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wider">
+          Χωρίς φάκελο
+        </h2>
+        {unfiled.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            Τίποτα εδώ — ό,τι αποθηκεύσετε χωρίς να το βάλετε σε φάκελο θα εμφανιστεί σε αυτή τη λίστα.
+          </p>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
+            {unfiled.map((p) => (
+              <ProjectCard key={p.id} project={p} folders={folders} />
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section className="space-y-3">
+        <h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wider">
+          Οι Φάκελοι μου
+        </h2>
+        {folders.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            Δεν έχετε φακέλους ακόμα — φτιάξτε έναν με το κουμπί «Νέος φάκελος» πάνω δεξιά.
+          </p>
+        ) : (
+          <div className="flex flex-col divide-y divide-border rounded-lg border border-border overflow-hidden">
+            {folders.map((f) => (
+              <button
+                key={f.id}
+                onClick={() => setOpenFolderId(f.id)}
+                className="flex items-center justify-between gap-3 px-4 py-3 hover:bg-muted transition-colors text-left"
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <FolderIcon className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <span className="text-sm font-medium truncate">{f.name}</span>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className="text-xs text-muted-foreground tabular-nums">
+                    {countFor(f.id)} σχέδι{countFor(f.id) === 1 ? "ο" : "α"}
+                  </span>
+                  <FolderMenu folder={f} onAfterDelete={() => {}} />
+                  <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+      </section>
     </div>
   );
 }
@@ -830,6 +871,7 @@ function DuplicateProjectDialog({
 function StatusPill({ status }: { status: Project["status"] }) {
   const map: Record<Project["status"], { label: string; cls: string }> = {
     draft: { label: "Πρόχειρο", cls: "bg-muted text-muted-foreground" },
+    saved: { label: "Αποθηκευμένο", cls: "bg-[color:var(--success)]/15 text-[color:var(--success)]" },
     active_collab: { label: "Συνεργασία", cls: "bg-primary/10 text-primary" },
     submitted: {
       label: "Υποβλήθηκε",
@@ -1272,66 +1314,6 @@ function ComingSoon({ label }: { label: string }) {
       title={`${label} — έρχεται σύντομα`}
       description="Αυτή η ενότητα θα ενεργοποιηθεί στο επόμενο στάδιο ανάπτυξης."
     />
-  );
-}
-
-function LibraryComing() {
-  return <TemplatePicker />;
-}
-
-function TemplatePicker() {
-  const { user } = useAuth();
-  const navigate = useNavigate();
-  const [busy, setBusy] = useState<string | null>(null);
-
-  const onPick = async (id: import("@/lib/canvas/templates").TemplateId, title: string) => {
-    if (!user) return;
-    setBusy(id);
-    try {
-      const { createProject } = await import("@/lib/projects");
-      const { buildTemplate } = await import("@/lib/canvas/templates");
-      const { mapStore } = await import("@/lib/canvas/storage");
-      const projectId = await createProject(user.uid, title);
-      await mapStore.save(projectId, buildTemplate(id));
-      toast.success("Πρότυπο φορτώθηκε");
-      navigate({ to: "/project/$projectId", params: { projectId } });
-    } catch (e) {
-      console.error(e);
-      toast.error("Δεν ήταν δυνατή η δημιουργία από πρότυπο");
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  return (
-    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-      {[
-        { id: "timeline", t: "Χρονογραμμή", d: "Διαδοχικά γεγονότα σε άξονα" },
-        { id: "cause-effect", t: "Αιτία — Αποτέλεσμα", d: "Διάγραμμα αιτιότητας" },
-        { id: "comparison", t: "Σύγκριση", d: "Πίνακας αντιπαραβολής" },
-        { id: "emotion-wheel", t: "Τροχός συναισθημάτων", d: "Χάρτης για θεραπευτική χρήση" },
-        { id: "mind-map", t: "Mind Map", d: "Κεντρική ιδέα με διακλαδώσεις" },
-        { id: "blank", t: "Κενός καμβάς", d: "Ξεκινήστε από το μηδέν" },
-      ].map((tpl) => (
-        <button
-          key={tpl.id}
-          type="button"
-          disabled={busy !== null}
-          onClick={() => onPick(tpl.id as import("@/lib/canvas/templates").TemplateId, tpl.t)}
-          className="text-left"
-        >
-          <Card className="panel-soft p-5 hover:shadow-[var(--shadow-lift)] cursor-pointer transition-shadow">
-            <div className="aspect-video canvas-dotgrid rounded-lg border border-border mb-3 flex items-center justify-center">
-              {busy === tpl.id ? (
-                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-              ) : null}
-            </div>
-            <h3 className="text-sm font-medium">{tpl.t}</h3>
-            <p className="text-xs text-muted-foreground mt-0.5">{tpl.d}</p>
-          </Card>
-        </button>
-      ))}
-    </div>
   );
 }
 
