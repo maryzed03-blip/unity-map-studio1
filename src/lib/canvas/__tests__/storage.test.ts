@@ -161,19 +161,21 @@ describe("FirestoreMapStore.save — inline mode (live sessions, rooms, groups)"
 });
 
 describe("FirestoreMapStore.save — write verification", () => {
-  it("throws (and shows an error) when the server content doesn't match what was sent — simulates a security rule silently rejecting the write", async () => {
-    cSetDocMock.mockResolvedValueOnce(undefined);
-    // Server still has OLD content — the write never actually landed there,
-    // even though cSetDoc's promise resolved "successfully" (Firestore's
-    // local-cache-first optimistic write behavior).
-    getDocFromServerMock.mockResolvedValueOnce(
-      fakeSnap({ payload: { ...emptyCanvasState(), objects: [{ id: "old-untouched" }] } }),
-    );
+  it("retries once, then throws (and shows an error) when the server content STILL doesn't match after the retry — simulates a persistent security rule rejection, not a timing fluke", async () => {
+    cSetDocMock.mockResolvedValue(undefined);
+    // Server still has OLD content on BOTH attempts — the write never
+    // actually lands there, even though cSetDoc's promise resolves
+    // "successfully" each time (Firestore's local-cache-first optimistic
+    // write behavior).
+    const staleSnap = fakeSnap({ payload: { ...emptyCanvasState(), objects: [{ id: "old-untouched" }] } });
+    getDocFromServerMock.mockResolvedValueOnce(staleSnap).mockResolvedValueOnce(staleSnap);
 
     const store = new FirestoreMapStore();
     const state: CanvasState = { ...emptyCanvasState(), objects: [{ id: "new-edit" } as never] };
     await expect(store.save("m5", state)).rejects.toThrow();
-  });
+    // Confirms a retry actually happened (write attempted twice).
+    expect(cSetDocMock).toHaveBeenCalledTimes(2);
+  }, 10000);
 
   it("succeeds silently when the server content matches what was sent", async () => {
     cSetDocMock.mockResolvedValueOnce(undefined);
@@ -181,4 +183,17 @@ describe("FirestoreMapStore.save — write verification", () => {
     const state: CanvasState = { ...emptyCanvasState(), objects: [] };
     await expect(store.save("m6", state)).resolves.toBeUndefined();
   });
+
+  it("recovers on retry if the first mismatch was transient — write succeeds without surfacing an error", async () => {
+    cSetDocMock.mockResolvedValue(undefined);
+    const state: CanvasState = { ...emptyCanvasState(), objects: [{ id: "new-edit" } as never] };
+    const sanitized = JSON.parse(JSON.stringify(state));
+    getDocFromServerMock
+      .mockResolvedValueOnce(fakeSnap({ payload: { ...emptyCanvasState(), objects: [{ id: "old-untouched" }] } }))
+      .mockResolvedValueOnce(fakeSnap({ payload: sanitized }));
+
+    const store = new FirestoreMapStore();
+    await expect(store.save("m7", state)).resolves.toBeUndefined();
+    expect(cSetDocMock).toHaveBeenCalledTimes(2);
+  }, 10000);
 });
