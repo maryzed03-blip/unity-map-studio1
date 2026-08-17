@@ -19,7 +19,7 @@
 // unnecessary complexity for this stage.
 // ────────────────────────────────────────────────────────────────────
 
-import { doc, serverTimestamp } from "firebase/firestore";
+import { doc, serverTimestamp, getDocFromServer } from "firebase/firestore";
 import { toast } from "sonner";
 import { db } from "../firebase";
 import { cGetDoc, cSetDoc } from "../quota-guard";
@@ -149,11 +149,43 @@ export class FirestoreMapStore implements MapStore {
         },
         { merge: true },
       );
+      // setDoc() resolves as soon as the write lands in Firestore's LOCAL
+      // cache — well before (and independent of) the actual server round
+      // trip. If the security rules reject the write server-side, that
+      // rejection happens silently in the background; this promise has
+      // already resolved "successfully" by then. Force a server read
+      // (bypassing the local cache entirely) and compare against what
+      // was just sent — if they don't match, the write never actually
+      // reached the server, and the person needs to know that NOW, not
+      // days later when the "saved" content quietly reverts.
+      try {
+        const serverSnap = await getDocFromServer(this.snapRef(mapId));
+        const serverPayload = serverSnap.exists() ? (serverSnap.data() as { payload?: CanvasState }).payload : undefined;
+        if (JSON.stringify(serverPayload) !== JSON.stringify(sanitized)) {
+          const mismatchErr = new Error("Server rejected the write (content mismatch after save)");
+          (mismatchErr as Error & { isWriteVerificationFailure?: boolean }).isWriteVerificationFailure = true;
+          throw mismatchErr;
+        }
+      } catch (verifyErr) {
+        console.error("Save verification failed — server content does not match what was saved", verifyErr);
+        toast.error(
+          "Η αποθήκευση δεν ολοκληρώθηκε στον server — δεν έχετε δικαίωμα εγγραφής εδώ. Οι αλλαγές σας ΔΕΝ αποθηκεύτηκαν.",
+        );
+        throw verifyErr;
+      }
       if (cloudWarnedThisSession) {
         cloudWarnedThisSession = false;
         toast.success("Η αποθήκευση στο cloud αποκαταστάθηκε.");
       }
     } catch (e) {
+      // A failed write-verification already showed its own specific toast
+      // and MUST propagate to the caller (e.g. the Save button), so the
+      // UI never shows "saved" for a write that never actually reached
+      // the server. Only genuine offline/network failures fall through
+      // to the generic "saved locally only" message below.
+      if ((e as Error & { isWriteVerificationFailure?: boolean })?.isWriteVerificationFailure) {
+        throw e;
+      }
       console.warn("Cloud save failed (kept local copy)", e);
       if (!cloudWarnedThisSession) {
         cloudWarnedThisSession = true;
