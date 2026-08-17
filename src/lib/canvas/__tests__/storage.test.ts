@@ -57,7 +57,7 @@ function fakeSnap(data: unknown) {
 describe("FirestoreMapStore.loadWithMeta — dual-read", () => {
   it("returns inline payload directly (OLD format) without calling payload-api", async () => {
     const inline: CanvasState = { ...emptyCanvasState(), objects: [] };
-    cGetDocMock.mockResolvedValueOnce(
+    getDocFromServerMock.mockResolvedValueOnce(
       fakeSnap({ payload: inline, savedAt: { toMillis: () => 1000 } }),
     );
     const store = new FirestoreMapStore();
@@ -68,7 +68,7 @@ describe("FirestoreMapStore.loadWithMeta — dual-read", () => {
   });
 
   it("calls loadPayload for NEW payloadRef/payloadUrl format", async () => {
-    cGetDocMock.mockResolvedValueOnce(
+    getDocFromServerMock.mockResolvedValueOnce(
       fakeSnap({
         payloadRef: "abc",
         payloadUrl: "https://x/abc",
@@ -83,6 +83,17 @@ describe("FirestoreMapStore.loadWithMeta — dual-read", () => {
     expect(loadPayloadMock).toHaveBeenCalledWith("abc", "https://x/abc");
     expect(r.state).toEqual(remoteState);
     expect(r.savedAt).toBe(2000);
+  });
+
+  it("falls back to cGetDoc when getDocFromServer fails (e.g. offline)", async () => {
+    getDocFromServerMock.mockRejectedValueOnce(new Error("client is offline"));
+    const inline: CanvasState = { ...emptyCanvasState(), objects: [] };
+    cGetDocMock.mockResolvedValueOnce(fakeSnap({ payload: inline, savedAt: { toMillis: () => 3000 } }));
+
+    const store = new FirestoreMapStore();
+    const r = await store.loadWithMeta("m-offline");
+    expect(r.state).toEqual(inline);
+    expect(r.savedAt).toBe(3000);
   });
 });
 
@@ -145,7 +156,7 @@ describe("FirestoreMapStore.save — inline mode (live sessions, rooms, groups)"
   it("a subsequent loadWithMeta prefers the fresh inline payload over a stale external pointer", async () => {
     // Simulate a board that once had an external payloadRef/Url, then got an
     // inline save on top (payloadRef/Url explicitly nulled by save()).
-    cGetDocMock.mockResolvedValueOnce(
+    getDocFromServerMock.mockResolvedValueOnce(
       fakeSnap({
         payload: { ...emptyCanvasState(), objects: [] },
         payloadRef: null,
