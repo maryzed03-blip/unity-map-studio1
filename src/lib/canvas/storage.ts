@@ -135,20 +135,17 @@ export class FirestoreMapStore implements MapStore {
       // simplest reliable way to strip undefined at every depth
       // (JSON.stringify omits undefined-valued keys entirely).
       const sanitized = JSON.parse(JSON.stringify(state)) as CanvasState;
-      await cSetDoc(
-        this.snapRef(mapId),
-        {
-          payload: sanitized,
-          // Clear any stale external-payload pointer so load() doesn't
-          // prefer an old external copy over this fresher inline one.
-          payloadRef: null,
-          payloadUrl: null,
-          schemaVersion: 1,
-          isCurrent: true,
-          savedAt: serverTimestamp(),
-        },
-        { merge: true },
-      );
+      const payload = {
+        payload: sanitized,
+        // Clear any stale external-payload pointer so load() doesn't
+        // prefer an old external copy over this fresher inline one.
+        payloadRef: null,
+        payloadUrl: null,
+        schemaVersion: 1,
+        isCurrent: true,
+        savedAt: serverTimestamp(),
+      };
+
       // setDoc() resolves as soon as the write lands in Firestore's LOCAL
       // cache — well before (and independent of) the actual server round
       // trip. If the security rules reject the write server-side, that
@@ -158,27 +155,54 @@ export class FirestoreMapStore implements MapStore {
       // was just sent — if they don't match, the write never actually
       // reached the server, and the person needs to know that NOW, not
       // days later when the "saved" content quietly reverts.
-      let serverSnap;
+      //
+      // One retry with a short delay: a mismatch immediately after writing
+      // to a JUST-CREATED document (e.g. a fresh duplicate/copy) could in
+      // principle be transient replication lag rather than a genuine
+      // permission denial — a security rule's get() on that brand-new doc
+      // racing its own propagation. Retrying confirms which one it is:
+      // if the retry succeeds, it was timing; if it still mismatches,
+      // it's a real, persistent rule problem.
+      const attemptWriteAndVerify = async () => {
+        await cSetDoc(this.snapRef(mapId), payload, { merge: true });
+        const serverSnap = await getDocFromServer(this.snapRef(mapId));
+        const serverPayload = serverSnap.exists() ? (serverSnap.data() as { payload?: CanvasState }).payload : undefined;
+        return JSON.stringify(serverPayload) === JSON.stringify(sanitized);
+      };
+
+      let verified: boolean;
+      let readFailure: unknown = null;
       try {
-        serverSnap = await getDocFromServer(this.snapRef(mapId));
-      } catch (readErr) {
-        const code = (readErr as { code?: string })?.code ?? "unknown";
-        console.error("Save verification READ itself failed (not the write) — code:", code, readErr);
+        verified = await attemptWriteAndVerify();
+      } catch (err) {
+        readFailure = err;
+        verified = false;
+      }
+
+      if (!verified && !readFailure) {
+        console.warn("Save verification mismatch on first attempt — retrying once after a short delay", { mapId });
+        await new Promise((r) => setTimeout(r, 900));
+        try {
+          verified = await attemptWriteAndVerify();
+        } catch (err) {
+          readFailure = err;
+        }
+      }
+
+      if (readFailure) {
+        const code = (readFailure as { code?: string })?.code ?? "unknown";
+        console.error("Save verification READ itself failed (not the write) — code:", code, readFailure);
         toast.error(`Δεν ήταν δυνατή η επιβεβαίωση αποθήκευσης (${code}). Δοκιμάστε ξανά.`);
         const wrapped = new Error(`Verification read failed: ${code}`);
         (wrapped as Error & { isWriteVerificationFailure?: boolean }).isWriteVerificationFailure = true;
         throw wrapped;
       }
-      const serverPayload = serverSnap.exists() ? (serverSnap.data() as { payload?: CanvasState }).payload : undefined;
-      if (JSON.stringify(serverPayload) !== JSON.stringify(sanitized)) {
-        console.error(
-          "Save verification MISMATCH — the write reached the local cache but not the server.",
-          { mapId, serverPayloadObjectCount: Array.isArray(serverPayload?.objects) ? serverPayload.objects.length : "n/a", sentObjectCount: sanitized.objects.length },
-        );
+      if (!verified) {
+        console.error("Save verification MISMATCH even after retry — this is a persistent rejection, not a timing fluke.", { mapId });
         toast.error(
           "Η αποθήκευση δεν ολοκληρώθηκε στον server — δεν έχετε δικαίωμα εγγραφής εδώ. Οι αλλαγές σας ΔΕΝ αποθηκεύτηκαν.",
         );
-        const mismatchErr = new Error("Server rejected the write (content mismatch after save)");
+        const mismatchErr = new Error("Server rejected the write (content mismatch after save, persisted through retry)");
         (mismatchErr as Error & { isWriteVerificationFailure?: boolean }).isWriteVerificationFailure = true;
         throw mismatchErr;
       }
