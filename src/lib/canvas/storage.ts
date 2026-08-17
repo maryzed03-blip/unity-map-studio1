@@ -102,7 +102,15 @@ export class FirestoreMapStore implements MapStore {
 
   async loadWithMeta(mapId: string): Promise<{ state: CanvasState | null; savedAt: number }> {
     try {
-      const snap = await cGetDoc(this.snapRef(mapId));
+      let snap;
+      try {
+        snap = await getDocFromServer(this.snapRef(mapId));
+      } catch {
+        // Offline, or some other reason the server round-trip failed —
+        // fall back to whatever Firestore has locally rather than fail
+        // outright.
+        snap = await cGetDoc(this.snapRef(mapId));
+      }
       if (snap.exists()) {
         const data = snap.data() as {
           payload?: CanvasState;
