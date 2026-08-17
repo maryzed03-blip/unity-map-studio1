@@ -158,20 +158,29 @@ export class FirestoreMapStore implements MapStore {
       // was just sent — if they don't match, the write never actually
       // reached the server, and the person needs to know that NOW, not
       // days later when the "saved" content quietly reverts.
+      let serverSnap;
       try {
-        const serverSnap = await getDocFromServer(this.snapRef(mapId));
-        const serverPayload = serverSnap.exists() ? (serverSnap.data() as { payload?: CanvasState }).payload : undefined;
-        if (JSON.stringify(serverPayload) !== JSON.stringify(sanitized)) {
-          const mismatchErr = new Error("Server rejected the write (content mismatch after save)");
-          (mismatchErr as Error & { isWriteVerificationFailure?: boolean }).isWriteVerificationFailure = true;
-          throw mismatchErr;
-        }
-      } catch (verifyErr) {
-        console.error("Save verification failed — server content does not match what was saved", verifyErr);
+        serverSnap = await getDocFromServer(this.snapRef(mapId));
+      } catch (readErr) {
+        const code = (readErr as { code?: string })?.code ?? "unknown";
+        console.error("Save verification READ itself failed (not the write) — code:", code, readErr);
+        toast.error(`Δεν ήταν δυνατή η επιβεβαίωση αποθήκευσης (${code}). Δοκιμάστε ξανά.`);
+        const wrapped = new Error(`Verification read failed: ${code}`);
+        (wrapped as Error & { isWriteVerificationFailure?: boolean }).isWriteVerificationFailure = true;
+        throw wrapped;
+      }
+      const serverPayload = serverSnap.exists() ? (serverSnap.data() as { payload?: CanvasState }).payload : undefined;
+      if (JSON.stringify(serverPayload) !== JSON.stringify(sanitized)) {
+        console.error(
+          "Save verification MISMATCH — the write reached the local cache but not the server.",
+          { mapId, serverPayloadObjectCount: Array.isArray(serverPayload?.objects) ? serverPayload.objects.length : "n/a", sentObjectCount: sanitized.objects.length },
+        );
         toast.error(
           "Η αποθήκευση δεν ολοκληρώθηκε στον server — δεν έχετε δικαίωμα εγγραφής εδώ. Οι αλλαγές σας ΔΕΝ αποθηκεύτηκαν.",
         );
-        throw verifyErr;
+        const mismatchErr = new Error("Server rejected the write (content mismatch after save)");
+        (mismatchErr as Error & { isWriteVerificationFailure?: boolean }).isWriteVerificationFailure = true;
+        throw mismatchErr;
       }
       if (cloudWarnedThisSession) {
         cloudWarnedThisSession = false;
