@@ -4,6 +4,7 @@ import { emptyCanvasState, type CanvasState } from "../types";
 // Mock the quota-guard wrappers and the payload-api before importing storage.
 const cGetDocMock = vi.fn();
 const cSetDocMock = vi.fn();
+const getDocFromServerMock = vi.fn();
 vi.mock("../../quota-guard", () => ({
   cGetDoc: (...a: unknown[]) => cGetDocMock(...a),
   cSetDoc: (...a: unknown[]) => cSetDocMock(...a),
@@ -12,6 +13,7 @@ vi.mock("../../firebase", () => ({ db: () => ({}) }));
 vi.mock("firebase/firestore", () => ({
   doc: (..._a: unknown[]) => ({ __ref: true }),
   serverTimestamp: () => ({ __ts: true }),
+  getDocFromServer: (...a: unknown[]) => getDocFromServerMock(...a),
 }));
 
 const loadPayloadMock = vi.fn();
@@ -33,6 +35,15 @@ beforeEach(() => {
   loadPayloadMock.mockReset();
   savePayloadMock.mockReset();
   deletePayloadMock.mockReset();
+  getDocFromServerMock.mockReset();
+  // Default: verification reads back whatever was just written, i.e. the
+  // write "succeeded" — matches real Firestore behavior for a normal,
+  // permitted write and keeps existing save() tests focused on what was
+  // sent rather than on the verification step itself.
+  getDocFromServerMock.mockImplementation(() => {
+    const lastWrite = cSetDocMock.mock.calls.at(-1)?.[1] as Record<string, unknown> | undefined;
+    return Promise.resolve(fakeSnap(lastWrite));
+  });
 });
 
 afterEach(() => {
@@ -146,5 +157,28 @@ describe("FirestoreMapStore.save — inline mode (live sessions, rooms, groups)"
     const r = await store.loadWithMeta("room-3-board");
     expect(loadPayloadMock).not.toHaveBeenCalled();
     expect(r.savedAt).toBe(5000);
+  });
+});
+
+describe("FirestoreMapStore.save — write verification", () => {
+  it("throws (and shows an error) when the server content doesn't match what was sent — simulates a security rule silently rejecting the write", async () => {
+    cSetDocMock.mockResolvedValueOnce(undefined);
+    // Server still has OLD content — the write never actually landed there,
+    // even though cSetDoc's promise resolved "successfully" (Firestore's
+    // local-cache-first optimistic write behavior).
+    getDocFromServerMock.mockResolvedValueOnce(
+      fakeSnap({ payload: { ...emptyCanvasState(), objects: [{ id: "old-untouched" }] } }),
+    );
+
+    const store = new FirestoreMapStore();
+    const state: CanvasState = { ...emptyCanvasState(), objects: [{ id: "new-edit" } as never] };
+    await expect(store.save("m5", state)).rejects.toThrow();
+  });
+
+  it("succeeds silently when the server content matches what was sent", async () => {
+    cSetDocMock.mockResolvedValueOnce(undefined);
+    const store = new FirestoreMapStore();
+    const state: CanvasState = { ...emptyCanvasState(), objects: [] };
+    await expect(store.save("m6", state)).resolves.toBeUndefined();
   });
 });
