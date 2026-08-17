@@ -66,6 +66,28 @@ export class LocalDraftStore {
 // WARN-once approach: don't spam a toast on every debounced save attempt.
 let cloudWarnedThisSession = false;
 
+/** JSON.stringify is sensitive to object key ORDER — two objects with
+ *  identical content but differently-ordered keys produce different
+ *  strings. Firestore doesn't guarantee it returns fields in the exact
+ *  order they were sent, so comparing raw JSON.stringify output (as the
+ *  save-verification check below does) can false-positive on a
+ *  perfectly successful write. This recursively sorts object keys at
+ *  every depth before stringifying, so the comparison only fails on
+ *  genuine content differences. */
+function canonicalStringify(value: unknown): string {
+  const sortKeys = (v: unknown): unknown => {
+    if (Array.isArray(v)) return v.map(sortKeys);
+    if (v && typeof v === "object") {
+      const obj = v as Record<string, unknown>;
+      const sorted: Record<string, unknown> = {};
+      for (const k of Object.keys(obj).sort()) sorted[k] = sortKeys(obj[k]);
+      return sorted;
+    }
+    return v;
+  };
+  return JSON.stringify(sortKeys(value));
+}
+
 export class FirestoreMapStore implements MapStore {
   private local = new LocalDraftStore();
 
@@ -167,7 +189,7 @@ export class FirestoreMapStore implements MapStore {
         await cSetDoc(this.snapRef(mapId), payload, { merge: true });
         const serverSnap = await getDocFromServer(this.snapRef(mapId));
         const serverPayload = serverSnap.exists() ? (serverSnap.data() as { payload?: CanvasState }).payload : undefined;
-        return JSON.stringify(serverPayload) === JSON.stringify(sanitized);
+        return canonicalStringify(serverPayload) === canonicalStringify(sanitized);
       };
 
       let verified: boolean;
