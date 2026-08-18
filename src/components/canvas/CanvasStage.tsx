@@ -697,26 +697,33 @@ export function CanvasStage({
     };
   }, []);
 
-  // Hydrate — check memory cache first (survives tab switches), then server
+  // Hydrate — always prefer a fresh server read. The in-memory cache
+  // (memory-cache.ts) is only used as an INSTANT placeholder while that
+  // fresh read is in flight (avoids a blank canvas flash on fast tab
+  // switches) — it is NEVER treated as the final answer, since it can
+  // easily go stale (e.g. save → navigate away → navigate back later,
+  // within the same page session, without a reload). This was very
+  // likely the actual cause of edits appearing to save successfully but
+  // reverting when reopening a project: the stale cached value was
+  // shown instead of ever re-checking the server.
   useEffect(() => {
     let alive = true;
 
-    // 1. If we have a fresh in-memory state for this mapId, use it immediately
+    // Instant placeholder from cache, if any — purely cosmetic, gets
+    // overwritten below as soon as the real fetch resolves.
     const cached = memoryCache.get(mapId);
     if (cached) {
       setState(cached);
       lastHashRef.current = hashCanvasState(cached);
       setHydrated(true);
-      return;
     }
 
-    // 2. Otherwise load from server/Firestore
     mapStore.load(mapId).then((loaded) => {
       if (!alive) return;
-      const s = loaded ?? emptyCanvasState();
+      const s = loaded ?? cached ?? emptyCanvasState();
       setState(s);
       lastHashRef.current = hashCanvasState(s);
-      memoryCache.set(mapId, s); // seed the cache
+      memoryCache.set(mapId, s);
       setHydrated(true);
     });
     return () => {
