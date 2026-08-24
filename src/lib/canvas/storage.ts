@@ -1,79 +1,87 @@
-// Storage seam. Component code only talks to the MapStore interface.
-// FirestoreMapStore persists permanent snapshots; LocalDraftStore caches
-// locally so the editor still works offline / before the first cloud save.
+// storage.ts — canvas board persistence.
 //
-// Quota: every Firestore call goes through the cGetDoc/cSetDoc wrappers
-// (src/lib/quota-guard.ts) — 1 read per load, 1 write per save.
+// Two paths, chosen by the caller via opts.inline:
 //
-// ── Stage 4 scope split ─────────────────────────────────────────────
-// Only SOLO/DRAFT project boards (Project.mode === "solo", this file's
-// FirestoreMapStore) offload their full JSON payload to the external
-// storage API (src/lib/canvas/payload-api.ts). Firestore keeps only
-// lightweight metadata ({ payloadRef, payloadUrl, payloadSize, ... }).
+//  DEFAULT (personal/solo boards, opts.inline falsy): the full board JSON
+//  is uploaded to the external "Unity Map API" payload server; Firestore
+//  only ever stores a small pointer (payloadRef/payloadUrl/size) plus
+//  metadata. This keeps Firestore document size and read/write costs low
+//  regardless of individual board size — important at scale (many
+//  students, cost-conscious architecture).
 //
-// LIVE session boards (mode "live" / "collaborativeFinal", handled via
-// the polling sync in CanvasStage's `liveSync` path and live-sessions.ts)
-// KEEP using a single inline Firestore snapshot document unchanged. Those
-// boards are short-lived (cleared as sessions end) and already optimized
-// for their own reasons; moving them to the external API would add
-// unnecessary complexity for this stage.
-// ────────────────────────────────────────────────────────────────────
+//  INLINE (opts.inline === true — live sessions, group boards): the full
+//  payload is written directly into the Firestore doc. These boards are
+//  short-lived, saved/read every couple of seconds by every participant,
+//  and need lower latency than an extra network hop to the payload API
+//  would allow.
+//
+// CRITICAL SAFETY RULES (both paths):
+//  1. Never write Firestore metadata claiming a save succeeded unless the
+//     underlying write is independently confirmed. For the default path
+//     that means: never write Firestore at all if the external upload
+//     failed. For the Firestore write itself (both paths), a fresh
+//     server read afterwards must confirm the write actually landed —
+//     Firestore's setDoc()/updateDoc() promises resolve as soon as a
+//     write lands in the LOCAL cache, well before (and independent of)
+//     the real server round trip, so a security-rule rejection can
+//     happen silently in the background after the promise "succeeds".
+//  2. Reads always prefer a fresh server read over Firestore's local
+//     cache, for the same reason — a cached read can show stale content
+//     that doesn't reflect a save which happened in another session.
+//  3. Comparisons for verification are key-order-independent — Firestore
+//     doesn't guarantee it returns fields in the exact order they were
+//     sent, even for genuinely identical content, so a naive
+//     JSON.stringify comparison can false-positive.
 
 import { doc, serverTimestamp, getDocFromServer } from "firebase/firestore";
 import { toast } from "sonner";
 import { db } from "../firebase";
 import { cGetDoc, cSetDoc } from "../quota-guard";
-import { emptyCanvasState, type CanvasState } from "./types";
-import { deletePayload, loadPayload } from "./payload-api";
+import type { CanvasState } from "./types";
+import { deletePayload, loadPayload, savePayload } from "./payload-api";
 
-export interface MapStore {
-  load(mapId: string, opts?: { inline?: boolean }): Promise<CanvasState | null>;
-  save(mapId: string, state: CanvasState, opts?: { inline?: boolean }): Promise<void>;
-  /** Returns the remote snapshot together with its serverTimestamp savedAt
-   *  (in ms) for version comparisons during live polling. Falls back to 0
-   *  when offline / not present. */
-  loadWithMeta(mapId: string): Promise<{ state: CanvasState | null; savedAt: number }>;
-  /** Best-effort cleanup of the externally-stored payload for a map.
-   *  Safe to call even if the map never had a remote payload. */
-  deleteRemotePayload?(mapId: string): Promise<void>;
+const LOCAL_PREFIX = "ums:canvas:";
+function KEY(mapId: string): string {
+  return `${LOCAL_PREFIX}${mapId}`;
 }
 
-const KEY = (mapId: string) => `ums:draft:v1:${mapId}`;
-
-export class LocalDraftStore {
+/** Emergency local fallback — never the source of truth, just keeps the
+ *  most recent state reachable on this device if the network/server is
+ *  unavailable. */
+class LocalMapStore {
+  async save(mapId: string, state: CanvasState): Promise<void> {
+    try {
+      window.localStorage.setItem(KEY(mapId), JSON.stringify(state));
+    } catch (e) {
+      console.warn("Local save failed", e);
+    }
+  }
   async load(mapId: string): Promise<CanvasState | null> {
-    if (typeof window === "undefined") return null;
     try {
       const raw = window.localStorage.getItem(KEY(mapId));
-      if (!raw) return null;
-      const parsed = JSON.parse(raw) as CanvasState;
-      return parsed?.objects ? parsed : emptyCanvasState();
+      return raw ? (JSON.parse(raw) as CanvasState) : null;
     } catch {
       return null;
     }
   }
-  async save(mapId: string, state: CanvasState): Promise<void> {
-    if (typeof window === "undefined") return;
+  async delete(mapId: string): Promise<void> {
     try {
-      window.localStorage.setItem(KEY(mapId), JSON.stringify(state));
+      window.localStorage.removeItem(KEY(mapId));
     } catch {
-      /* quota etc */
+      /* */
     }
   }
 }
 
-// Per-session "already warned" flag — same pattern as the quota-guard
-// WARN-once approach: don't spam a toast on every debounced save attempt.
-let cloudWarnedThisSession = false;
-
 /** JSON.stringify is sensitive to object key ORDER — two objects with
  *  identical content but differently-ordered keys produce different
  *  strings. Firestore doesn't guarantee it returns fields in the exact
- *  order they were sent, so comparing raw JSON.stringify output (as the
- *  save-verification check below does) can false-positive on a
- *  perfectly successful write. This recursively sorts object keys at
- *  every depth before stringifying, so the comparison only fails on
- *  genuine content differences. */
+ *  order they were sent, so a raw JSON.stringify comparison used for
+ *  save-verification could false-positive on a perfectly successful
+ *  write. This recursively sorts object keys at every depth before
+ *  stringifying, so the comparison only fails on genuine content
+ *  differences. (Array order is left untouched — it's meaningful, e.g.
+ *  z-index/paint order of canvas objects.) */
 function canonicalStringify(value: unknown): string {
   const sortKeys = (v: unknown): unknown => {
     if (Array.isArray(v)) return v.map(sortKeys);
@@ -88,27 +96,168 @@ function canonicalStringify(value: unknown): string {
   return JSON.stringify(sortKeys(value));
 }
 
-export class FirestoreMapStore implements MapStore {
-  private local = new LocalDraftStore();
+// Per-session "already warned" flag — don't spam a toast on every
+// debounced save attempt while a problem persists.
+let cloudWarnedThisSession = false;
+
+export class FirestoreMapStore {
+  private local = new LocalMapStore();
 
   private snapRef(mapId: string) {
     return doc(db(), "projects", mapId, "snapshots", "current");
   }
 
-  async load(mapId: string): Promise<CanvasState | null> {
-    const { state } = await this.loadWithMeta(mapId);
-    return state;
+  async save(mapId: string, state: CanvasState, opts?: { inline?: boolean }): Promise<void> {
+    // Always update the local fallback first so offline editing never loses data.
+    await this.local.save(mapId, state);
+
+    // Firestore's setDoc() throws on ANY undefined field value anywhere in
+    // the object graph. JSON round-tripping strips those (JSON.stringify
+    // omits undefined-valued keys entirely) — the simplest reliable fix.
+    const sanitized = JSON.parse(JSON.stringify(state)) as CanvasState;
+
+    if (opts?.inline) {
+      await this.saveInline(mapId, sanitized);
+      return;
+    }
+    await this.saveExternal(mapId, sanitized);
   }
 
+  /** Live sessions, group boards: full payload written directly into the
+   *  Firestore doc. Short-lived, frequently saved — the extra network hop
+   *  to the payload API isn't worth it here. */
+  private async saveInline(mapId: string, sanitized: CanvasState): Promise<void> {
+    try {
+      await cSetDoc(
+        this.snapRef(mapId),
+        {
+          payload: sanitized,
+          payloadRef: null,
+          payloadUrl: null,
+          payloadSize: null,
+          schemaVersion: 1,
+          isCurrent: true,
+          savedAt: serverTimestamp(),
+        },
+        { merge: true },
+      );
+    } catch (e) {
+      console.warn("Inline live-board save failed", e);
+    }
+  }
+
+  /** Personal/solo boards: upload the full JSON externally first, then
+   *  write only a small pointer + metadata into Firestore. Never writes
+   *  Firestore at all if the external upload failed. */
+  private async saveExternal(mapId: string, sanitized: CanvasState): Promise<void> {
+    let uploaded: { payloadRef: string; payloadUrl: string; size: number };
+    try {
+      uploaded = await savePayload(sanitized);
+    } catch (e) {
+      console.error("External payload upload failed — Firestore metadata was NOT touched.", e);
+      if (!cloudWarnedThisSession) {
+        cloudWarnedThisSession = true;
+        toast.error(
+          "Η αποθήκευση απέτυχε — δεν ήταν δυνατή η σύνδεση με τον server αποθήκευσης. Οι αλλαγές σας παραμένουν μόνο σε αυτή τη συσκευή.",
+        );
+      }
+      throw e;
+    }
+
+    const metadata = {
+      payloadRef: uploaded.payloadRef,
+      payloadUrl: uploaded.payloadUrl,
+      payloadSize: uploaded.size,
+      // Clear any stale inline payload from a legacy/earlier save so
+      // load() doesn't prefer old inline content over this fresh pointer.
+      payload: null,
+      schemaVersion: 1,
+      isCurrent: true,
+      savedAt: serverTimestamp(),
+    };
+
+    try {
+      await cSetDoc(this.snapRef(mapId), metadata, { merge: true });
+    } catch (e) {
+      console.error("Firestore metadata write failed after a successful external upload.", e);
+      toast.error(
+        "Το περιεχόμενο αποθηκεύτηκε στον server, αλλά η καταγραφή στη βάση απέτυχε. Δοκιμάστε ξανά.",
+      );
+      throw e;
+    }
+
+    await this.verifyMetadataWrite(mapId, uploaded.payloadRef);
+
+    if (cloudWarnedThisSession) {
+      cloudWarnedThisSession = false;
+      toast.success("Η αποθήκευση αποκαταστάθηκε.");
+    }
+  }
+
+  /** setDoc() resolves as soon as the write lands in Firestore's LOCAL
+   *  cache — before (and independent of) the actual server round trip.
+   *  If a security rule rejects the write server-side, that happens
+   *  silently in the background; this promise has already resolved
+   *  "successfully" by then. Force a server read (bypassing the local
+   *  cache) and confirm it reflects the payloadRef we just wrote. One
+   *  retry after a short delay covers brief replication lag before
+   *  concluding it's a genuine, persistent rejection. */
+  private async verifyMetadataWrite(mapId: string, expectedPayloadRef: string): Promise<void> {
+    const checkOnce = async (): Promise<boolean> => {
+      const serverSnap = await getDocFromServer(this.snapRef(mapId));
+      const data = serverSnap.exists() ? (serverSnap.data() as { payloadRef?: string }) : undefined;
+      return canonicalStringify(data?.payloadRef ?? null) === canonicalStringify(expectedPayloadRef);
+    };
+
+    let verified = false;
+    let readFailure: unknown = null;
+    try {
+      verified = await checkOnce();
+    } catch (e) {
+      readFailure = e;
+    }
+
+    if (!verified && !readFailure) {
+      console.warn("Save verification mismatch on first attempt — retrying once after a short delay", { mapId });
+      await new Promise((r) => setTimeout(r, 900));
+      try {
+        verified = await checkOnce();
+      } catch (e) {
+        readFailure = e;
+      }
+    }
+
+    if (readFailure) {
+      const code = (readFailure as { code?: string })?.code ?? "unknown";
+      console.error("Save verification READ itself failed (not the write) — code:", code, readFailure);
+      toast.error(`Δεν ήταν δυνατή η επιβεβαίωση αποθήκευσης (${code}). Δοκιμάστε ξανά.`);
+      const wrapped = new Error(`Verification read failed: ${code}`);
+      (wrapped as Error & { isWriteVerificationFailure?: boolean }).isWriteVerificationFailure = true;
+      throw wrapped;
+    }
+    if (!verified) {
+      console.error("Save verification MISMATCH even after retry — persistent rejection, not a timing fluke.", {
+        mapId,
+      });
+      toast.error(
+        "Η αποθήκευση δεν ολοκληρώθηκε στη βάση — δεν έχετε δικαίωμα εγγραφής εδώ. Οι αλλαγές σας ΔΕΝ αποθηκεύτηκαν.",
+      );
+      const mismatchErr = new Error("Firestore metadata write rejected (verification mismatch, persisted through retry)");
+      (mismatchErr as Error & { isWriteVerificationFailure?: boolean }).isWriteVerificationFailure = true;
+      throw mismatchErr;
+    }
+  }
+
+  /** Always prefers a fresh server read over Firestore's local cache (see
+   *  the module-level note on why). Falls back to the regular
+   *  cache-tolerant read only if the server round-trip itself fails
+   *  (e.g. offline), and to the local device cache if even that fails. */
   async loadWithMeta(mapId: string): Promise<{ state: CanvasState | null; savedAt: number }> {
     try {
       let snap;
       try {
         snap = await getDocFromServer(this.snapRef(mapId));
       } catch {
-        // Offline, or some other reason the server round-trip failed —
-        // fall back to whatever Firestore has locally rather than fail
-        // outright.
         snap = await cGetDoc(this.snapRef(mapId));
       }
       if (snap.exists()) {
@@ -120,16 +269,15 @@ export class FirestoreMapStore implements MapStore {
         };
         const savedAt = data.savedAt?.toMillis?.() ?? 0;
 
-        // External payload API format — solo/draft boards only (see save()).
+        // External payload — the default format for personal/solo boards.
         if (data.payloadRef && data.payloadUrl) {
           const state = await loadPayload(data.payloadRef, data.payloadUrl);
           await this.local.save(mapId, state);
           return { state, savedAt };
         }
 
-        // Inline format — used for live sessions, workspace rooms, and group
-        // boards (saved with { inline: true }), and for legacy boards saved
-        // before the external payload API existed.
+        // Inline payload — live sessions, group boards, or a legacy board
+        // saved before the external payload API existed.
         if (data?.payload?.objects) {
           await this.local.save(mapId, data.payload);
           return { state: data.payload, savedAt };
@@ -142,140 +290,27 @@ export class FirestoreMapStore implements MapStore {
     return { state: local, savedAt: 0 };
   }
 
-  async save(mapId: string, state: CanvasState, _opts?: { inline?: boolean }): Promise<void> {
-    // Always update the local fallback first so offline editing never loses data.
-    await this.local.save(mapId, state);
-
-    // Always save directly into the Firestore doc (the old "inline" path,
-    // now used unconditionally). Previously, solo/draft boards went
-    // through an external payload API first — but if that service or its
-    // token wasn't configured, the save would silently only reach this
-    // device's localStorage, never Firestore. That's what caused boards
-    // to open completely empty for anyone else (a collaborator, or
-    // someone the project was sent to) even though the sender saw no
-    // error. Firestore's 1MB/doc limit is comfortably more than this
-    // app's typical canvas size, so there's no real downside to just
-    // always writing here directly.
-    try {
-      // Firestore's setDoc() throws on ANY undefined field value,
-      // anywhere in the object graph — one shape with an optional prop
-      // left as `undefined` (instead of omitted or null) is enough to
-      // make every single save silently fail from then on, which looks
-      // exactly like "sync stopped working". JSON round-tripping is the
-      // simplest reliable way to strip undefined at every depth
-      // (JSON.stringify omits undefined-valued keys entirely).
-      const sanitized = JSON.parse(JSON.stringify(state)) as CanvasState;
-      const payload = {
-        payload: sanitized,
-        // Clear any stale external-payload pointer so load() doesn't
-        // prefer an old external copy over this fresher inline one.
-        payloadRef: null,
-        payloadUrl: null,
-        schemaVersion: 1,
-        isCurrent: true,
-        savedAt: serverTimestamp(),
-      };
-
-      // setDoc() resolves as soon as the write lands in Firestore's LOCAL
-      // cache — well before (and independent of) the actual server round
-      // trip. If the security rules reject the write server-side, that
-      // rejection happens silently in the background; this promise has
-      // already resolved "successfully" by then. Force a server read
-      // (bypassing the local cache entirely) and compare against what
-      // was just sent — if they don't match, the write never actually
-      // reached the server, and the person needs to know that NOW, not
-      // days later when the "saved" content quietly reverts.
-      //
-      // One retry with a short delay: a mismatch immediately after writing
-      // to a JUST-CREATED document (e.g. a fresh duplicate/copy) could in
-      // principle be transient replication lag rather than a genuine
-      // permission denial — a security rule's get() on that brand-new doc
-      // racing its own propagation. Retrying confirms which one it is:
-      // if the retry succeeds, it was timing; if it still mismatches,
-      // it's a real, persistent rule problem.
-      const attemptWriteAndVerify = async () => {
-        await cSetDoc(this.snapRef(mapId), payload, { merge: true });
-        const serverSnap = await getDocFromServer(this.snapRef(mapId));
-        const serverPayload = serverSnap.exists() ? (serverSnap.data() as { payload?: CanvasState }).payload : undefined;
-        return canonicalStringify(serverPayload) === canonicalStringify(sanitized);
-      };
-
-      let verified: boolean;
-      let readFailure: unknown = null;
-      try {
-        verified = await attemptWriteAndVerify();
-      } catch (err) {
-        readFailure = err;
-        verified = false;
-      }
-
-      if (!verified && !readFailure) {
-        console.warn("Save verification mismatch on first attempt — retrying once after a short delay", { mapId });
-        await new Promise((r) => setTimeout(r, 900));
-        try {
-          verified = await attemptWriteAndVerify();
-        } catch (err) {
-          readFailure = err;
-        }
-      }
-
-      if (readFailure) {
-        const code = (readFailure as { code?: string })?.code ?? "unknown";
-        console.error("Save verification READ itself failed (not the write) — code:", code, readFailure);
-        toast.error(`Δεν ήταν δυνατή η επιβεβαίωση αποθήκευσης (${code}). Δοκιμάστε ξανά.`);
-        const wrapped = new Error(`Verification read failed: ${code}`);
-        (wrapped as Error & { isWriteVerificationFailure?: boolean }).isWriteVerificationFailure = true;
-        throw wrapped;
-      }
-      if (!verified) {
-        console.error("Save verification MISMATCH even after retry — this is a persistent rejection, not a timing fluke.", { mapId });
-        toast.error(
-          "Η αποθήκευση δεν ολοκληρώθηκε στον server — δεν έχετε δικαίωμα εγγραφής εδώ. Οι αλλαγές σας ΔΕΝ αποθηκεύτηκαν.",
-        );
-        const mismatchErr = new Error("Server rejected the write (content mismatch after save, persisted through retry)");
-        (mismatchErr as Error & { isWriteVerificationFailure?: boolean }).isWriteVerificationFailure = true;
-        throw mismatchErr;
-      }
-      if (cloudWarnedThisSession) {
-        cloudWarnedThisSession = false;
-        toast.success("Η αποθήκευση στο cloud αποκαταστάθηκε.");
-      }
-    } catch (e) {
-      // A failed write-verification already showed its own specific toast
-      // and MUST propagate to the caller (e.g. the Save button), so the
-      // UI never shows "saved" for a write that never actually reached
-      // the server. Only genuine offline/network failures fall through
-      // to the generic "saved locally only" message below.
-      if ((e as Error & { isWriteVerificationFailure?: boolean })?.isWriteVerificationFailure) {
-        throw e;
-      }
-      console.warn("Cloud save failed (kept local copy)", e);
-      if (!cloudWarnedThisSession) {
-        cloudWarnedThisSession = true;
-        toast.error(
-          "Η αποθήκευση στο cloud δεν είναι διαθέσιμη. Οι αλλαγές αποθηκεύονται μόνο σε αυτή τη συσκευή.",
-        );
-      }
-    }
+  async load(mapId: string): Promise<CanvasState | null> {
+    const { state } = await this.loadWithMeta(mapId);
+    return state;
   }
 
-  /** Read the current metadata doc and ask the external API to delete its
-   *  payload. Best-effort — never throws. Call from project-delete flows.
-   *  NOTE: there is currently no delete-project flow in projects.ts; this
-   *  method exists so it can be wired in as a follow-up without revisiting
-   *  the storage layer. */
-  async deleteRemotePayload(mapId: string): Promise<void> {
+  /** Best-effort: also deletes the external payload if this board had
+   *  one. Never blocks or throws on that part failing — the Firestore
+   *  doc itself is what actually controls whether the board still
+   *  "exists" from the app's point of view. */
+  async delete(mapId: string): Promise<void> {
     try {
       const snap = await cGetDoc(this.snapRef(mapId));
-      if (!snap.exists()) return;
-      const data = snap.data() as { payloadRef?: string };
-      if (data.payloadRef) {
-        await deletePayload(data.payloadRef);
+      const data = snap.exists() ? (snap.data() as { payloadRef?: string }) : undefined;
+      if (data?.payloadRef) {
+        deletePayload(data.payloadRef).catch((e) => console.warn("External payload delete failed", e));
       }
     } catch (e) {
-      console.warn("deleteRemotePayload failed", e);
+      console.warn("Could not check for an external payload to delete", e);
     }
+    await this.local.delete(mapId);
   }
 }
 
-export const mapStore: MapStore = new FirestoreMapStore();
+export const mapStore = new FirestoreMapStore();
