@@ -30,7 +30,7 @@ export interface SavedPayload {
  *  (network, non-2xx, or a malformed response) — callers must never
  *  treat a thrown error as a partial success. */
 export async function savePayload(state: CanvasState): Promise<SavedPayload> {
-  const body = JSON.stringify(state);
+  const body = JSON.stringify({ payload: state });
   let res: Response;
   try {
     res = await fetch(PROXY_BASE, {
