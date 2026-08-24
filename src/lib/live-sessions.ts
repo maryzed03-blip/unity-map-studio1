@@ -19,7 +19,7 @@ import {
   arrayRemove,
   type Unsubscribe,
 } from "firebase/firestore";
-import { db } from "./firebase";
+import { auth, db } from "./firebase";
 import { createProject, type WorkspaceType } from "./projects";
 import { cAddDoc, cGetDoc, cGetDocs, cOnSnapshot, cSetDoc, cUpdateDoc } from "./quota-guard";
 
@@ -214,26 +214,41 @@ export function subscribeTeacherSession(
 // simply whichever liveSession is currently active. Used by
 // LiveClassButton (replaces the old browsable "live lessons" list).
 export function subscribeActiveSession(cb: (s: LiveSession | null) => void): Unsubscribe {
-  // Deliberately NOT combined with orderBy in the query itself: equality +
-  // orderBy on a different field needs a composite index created manually
-  // in the Firebase console first. Instead, fetch all "active" sessions
-  // (normally just one) and pick the most recently updated client-side —
-  // this matters because stale orphaned sessions from earlier testing can
-  // be left marked "active" too, and an arbitrary Firestore pick among
-  // them could grab the wrong one, leaving the student-side LIVE badge
-  // permanently grey even though the teacher really is in a (different)
-  // active session.
-  const q = query(collection(db(), "liveSessions"), where("status", "==", "active"));
+  const uid = auth().currentUser?.uid;
+
+  // Firestore rules only allow a signed-in user to read liveSessions where
+  // they are the teacher or already present in participantIds. Querying all
+  // active sessions causes Firestore to reject the whole listener with
+  // permission-denied because security rules are not post-query filters.
+  //
+  // Every teacher is inserted into participantIds when the session is
+  // created, so one participantIds array-contains query safely covers both
+  // teachers and students without loosening the Firestore rules.
+  if (!uid) {
+    cb(null);
+    return () => {};
+  }
+
+  const q = query(
+    collection(db(), "liveSessions"),
+    where("participantIds", "array-contains", uid),
+  );
+
   return cOnSnapshot(q, (snap) => {
     const qs = snap as unknown as {
       docs: Array<{ id: string; data: () => Omit<LiveSession, "id"> }>;
     };
-    const rows = qs.docs.map((d) => ({ id: d.id, ...d.data() }));
+
+    const rows = qs.docs
+      .map((d) => ({ id: d.id, ...d.data() }))
+      .filter((s) => s.status === "active");
+
     rows.sort((a, b) => {
       const at = (a.updatedAt as { toMillis?: () => number } | undefined)?.toMillis?.() ?? 0;
       const bt = (b.updatedAt as { toMillis?: () => number } | undefined)?.toMillis?.() ?? 0;
       return bt - at;
     });
+
     cb(rows[0] ?? null);
   });
 }
