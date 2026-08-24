@@ -1,123 +1,118 @@
-// payload-api.ts — client for the external "Unity Map API" payload storage
-// server (demo.unityenergetics.org/unity-map-api). Used to keep Firestore
-// usage minimal: the (potentially large) canvas JSON for a saved board
-// lives here, and only a small pointer (payloadRef/payloadUrl/size) is
-// kept in Firestore. This matters at scale (many students) — Firestore
-// document size and storage/read costs stay low regardless of how big
-// individual boards get.
+// /api/board-payload.ts — Vercel serverless function.
 //
-// CRITICAL SAFETY RULE: every function here either resolves with a
-// genuinely confirmed result, or throws. Nothing is ever silently
-// swallowed. storage.ts relies on this — it must NEVER write Firestore
-// metadata claiming a save succeeded unless this module's savePayload()
-// actually, synchronously confirmed success with the server. That
-// mismatch (metadata says "saved", no real payload behind it) is what
-// caused boards to come back empty in an earlier version of this app.
+// Proxies save/load/delete requests to the external "Unity Map API"
+// payload storage server (demo.unityenergetics.org/unity-map-api).
+//
+// Why this exists: the browser can't call that external server directly
+// — its CORS policy doesn't send an Access-Control-Allow-Origin header,
+// so the browser blocks the request before it's even sent (the preflight
+// fails). CORS is a BROWSER-ONLY restriction; it does not apply to
+// server-to-server requests. This function runs on Vercel's servers, so
+// it can freely call the external API — the browser only ever talks to
+// this same-origin endpoint, which has no CORS issue at all.
+//
+// Bonus: the storage token now lives only in a server-side environment
+// variable, never shipped to the browser at all (previously it was a
+// VITE_-prefixed variable, which Vite bundles directly into the client
+// JavaScript — visible to anyone who opened DevTools).
+//
+// IMPORTANT — this file must live at the PROJECT ROOT under /api/, i.e.
+// exactly "api/board-payload.ts" next to package.json — NOT inside src/.
+// Vercel auto-detects any file under a root-level /api/ folder as a
+// serverless function, regardless of which frontend framework the rest
+// of the app uses.
 
-import type { CanvasState } from "./types";
+export const config = { runtime: "nodejs" };
 
 const API_BASE = "https://demo.unityenergetics.org/unity-map-api";
 
-function authHeader(): Record<string, string> {
-  const token = import.meta.env.VITE_BOARD_STORAGE_TOKEN as string | undefined;
+// Reuses the same token already configured as VITE_BOARD_STORAGE_TOKEN in
+// Vercel — server-side code can read any environment variable regardless
+// of the VITE_ prefix (that prefix only controls whether Vite bundles a
+// variable into the CLIENT build). No new Vercel env var needed to get
+// this working right now.
+function getToken(): string | null {
+  return process.env.VITE_BOARD_STORAGE_TOKEN || process.env.BOARD_STORAGE_TOKEN || null;
+}
+
+interface VercelRequest {
+  method?: string;
+  query: Record<string, string | string[] | undefined>;
+  body: unknown;
+}
+interface VercelResponse {
+  status(code: number): VercelResponse;
+  json(body: unknown): void;
+}
+
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  const token = getToken();
   if (!token) {
-    throw new Error(
-      "VITE_BOARD_STORAGE_TOKEN δεν είναι ρυθμισμένο σε αυτό το περιβάλλον — η αποθήκευση δεν μπορεί να προχωρήσει.",
-    );
-  }
-  return { Authorization: `Bearer ${token}` };
-}
-
-export interface SavedPayload {
-  payloadRef: string;
-  payloadUrl: string;
-  size: number;
-}
-
-/** POST /payloads — uploads the full board JSON, returns a pointer to it.
- *  Throws on any failure (network, non-2xx, or a malformed response) —
- *  callers must never treat a thrown error as a partial success. */
-export async function savePayload(state: CanvasState): Promise<SavedPayload> {
-  const body = JSON.stringify(state);
-  let res: Response;
-  try {
-    res = await fetch(`${API_BASE}/payloads`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...authHeader(),
-      },
-      body,
+    res.status(500).json({
+      error: "Server misconfigured: VITE_BOARD_STORAGE_TOKEN is not set for this Vercel environment.",
     });
-  } catch (networkErr) {
-    throw new Error(
-      `Αδυναμία σύνδεσης με το storage API: ${networkErr instanceof Error ? networkErr.message : String(networkErr)}`,
-    );
+    return;
   }
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`Το storage API απέρριψε την αποθήκευση (HTTP ${res.status}): ${text || res.statusText}`);
-  }
-  const data = await res.json().catch(() => null);
-  if (!data || data.success !== true || !data.payloadRef || !data.payloadUrl) {
-    throw new Error("Το storage API επέστρεψε μη έγκυρη ή ημιτελή απάντηση κατά την αποθήκευση.");
-  }
-  return {
-    payloadRef: String(data.payloadRef),
-    payloadUrl: String(data.payloadUrl),
-    size: typeof data.size === "number" ? data.size : body.length,
-  };
-}
 
-/** GET /payloads/{payloadRef} (via the full payloadUrl returned by
- *  savePayload) — fetches the actual board JSON back. Throws if the
- *  request fails or the response doesn't look like a valid CanvasState. */
-export async function loadPayload(payloadRef: string, payloadUrl: string): Promise<CanvasState> {
-  const url = payloadUrl || `${API_BASE}/payloads/${encodeURIComponent(payloadRef)}`;
-  let res: Response;
   try {
-    res = await fetch(url, { headers: authHeader() });
-  } catch (networkErr) {
-    throw new Error(
-      `Αδυναμία σύνδεσης με το storage API κατά τη φόρτωση: ${networkErr instanceof Error ? networkErr.message : String(networkErr)}`,
-    );
-  }
-  if (!res.ok) {
-    throw new Error(`Αποτυχία φόρτωσης από το storage API (HTTP ${res.status}) για ${payloadRef}`);
-  }
-  const data = await res.json().catch(() => null);
-  if (!data || !Array.isArray(data.objects)) {
-    throw new Error(`Μη έγκυρα δεδομένα (λείπει το πεδίο objects) από το storage API για ${payloadRef}`);
-  }
-  return data as CanvasState;
-}
+    if (req.method === "POST") {
+      // Save — forward the full board JSON.
+      const upstream = await fetch(`${API_BASE}/payloads`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(req.body),
+      });
+      const text = await upstream.text();
+      res.status(upstream.status).json(safeParseJson(text));
+      return;
+    }
 
-/** DELETE /payloads/{payloadRef}. A 404 (already gone) is treated as
- *  success — everything else throws. */
-export async function deletePayload(payloadRef: string): Promise<void> {
-  let res: Response;
-  try {
-    res = await fetch(`${API_BASE}/payloads/${encodeURIComponent(payloadRef)}`, {
-      method: "DELETE",
-      headers: authHeader(),
+    if (req.method === "GET") {
+      const ref = firstString(req.query.ref);
+      if (!ref) {
+        res.status(400).json({ error: "Missing required query parameter: ref" });
+        return;
+      }
+      const upstream = await fetch(`${API_BASE}/payloads/${encodeURIComponent(ref)}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const text = await upstream.text();
+      res.status(upstream.status).json(safeParseJson(text));
+      return;
+    }
+
+    if (req.method === "DELETE") {
+      const ref = firstString(req.query.ref);
+      if (!ref) {
+        res.status(400).json({ error: "Missing required query parameter: ref" });
+        return;
+      }
+      const upstream = await fetch(`${API_BASE}/payloads/${encodeURIComponent(ref)}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      res.status(upstream.status).json({ ok: upstream.ok || upstream.status === 404 });
+      return;
+    }
+
+    res.status(405).json({ error: `Method not allowed: ${req.method}` });
+  } catch (e) {
+    res.status(502).json({
+      error: `Αδυναμία σύνδεσης με το εξωτερικό storage API: ${e instanceof Error ? e.message : String(e)}`,
     });
-  } catch (networkErr) {
-    throw new Error(
-      `Αδυναμία σύνδεσης με το storage API κατά τη διαγραφή: ${networkErr instanceof Error ? networkErr.message : String(networkErr)}`,
-    );
-  }
-  if (!res.ok && res.status !== 404) {
-    throw new Error(`Αποτυχία διαγραφής από το storage API (HTTP ${res.status})`);
   }
 }
 
-/** GET /health — simple connectivity/config check, e.g. for a settings
- *  page or startup diagnostic. Never throws; returns false on any problem. */
-export async function checkStorageHealth(): Promise<boolean> {
+function firstString(v: string | string[] | undefined): string | undefined {
+  return Array.isArray(v) ? v[0] : v;
+}
+function safeParseJson(text: string): unknown {
   try {
-    const res = await fetch(`${API_BASE}/health`);
-    return res.ok;
+    return JSON.parse(text);
   } catch {
-    return false;
+    return { raw: text };
   }
 }
