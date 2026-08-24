@@ -26,29 +26,55 @@ export interface SavedPayload {
   size: number;
 }
 
+/**
+ * External storage schema.
+ *
+ * The storage API validates three required arrays:
+ * - nodes
+ * - edges
+ * - drawings
+ *
+ * Unity Map Studio internally keeps every canvas item in one `objects`
+ * array, so we also keep that canonical array in the payload. This gives
+ * us a lossless round-trip even though the external API wants the items
+ * split into categories for validation/storage purposes.
+ */
 interface ExternalCanvasPayload {
+  objects: CanvasState["objects"];
   nodes: CanvasState["objects"];
-  edges: unknown[];
+  edges: CanvasState["objects"];
+  drawings: CanvasState["objects"];
   viewport: CanvasState["viewport"];
   settings: CanvasState["settings"];
 }
 
 function toExternalPayload(state: CanvasState): ExternalCanvasPayload {
-  return {
-    // The storage API requires a "nodes" array.
-    //
-    // Unity Map Studio keeps ALL canvas objects in state.objects,
-    // including shapes, text, drawings, lines and connectors.
-    // We therefore preserve the complete canvas here.
-    nodes: state.objects,
+  const nodes: CanvasState["objects"] = [];
+  const edges: CanvasState["objects"] = [];
+  const drawings: CanvasState["objects"] = [];
 
-    // The storage API also requires an "edges" array.
-    //
-    // CanvasState does NOT have a separate edges collection.
-    // Lines and connectors already live inside state.objects.
-    // Sending them again as edges would duplicate them when loading
-    // the canvas, so this array intentionally remains empty.
-    edges: [],
+  for (const object of state.objects) {
+    if (object.type === "drawing") {
+      drawings.push(object);
+      continue;
+    }
+
+    if (object.type === "line" || object.type === "connector") {
+      edges.push(object);
+      continue;
+    }
+
+    nodes.push(object);
+  }
+
+  return {
+    // Canonical, lossless Unity Map Studio representation.
+    objects: state.objects,
+
+    // Required external API categories.
+    nodes,
+    edges,
+    drawings,
 
     viewport: state.viewport,
     settings: state.settings,
@@ -77,6 +103,50 @@ function isSettings(value: unknown): value is CanvasState["settings"] {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
+function mergeExternalArrays(stored: {
+  nodes?: unknown;
+  edges?: unknown;
+  drawings?: unknown;
+}): CanvasState["objects"] | null {
+  if (!Array.isArray(stored.nodes)) {
+    return null;
+  }
+
+  const nodes = stored.nodes as CanvasState["objects"];
+
+  const edges = Array.isArray(stored.edges)
+    ? (stored.edges as CanvasState["objects"])
+    : [];
+
+  const drawings = Array.isArray(stored.drawings)
+    ? (stored.drawings as CanvasState["objects"])
+    : [];
+
+  // Deduplicate defensively by id.
+  //
+  // This also protects transitional payloads where an object may
+  // accidentally exist both in nodes and in its dedicated array.
+  const byId = new Map<string, CanvasState["objects"][number]>();
+
+  for (const object of [...nodes, ...edges, ...drawings]) {
+    if (
+      object &&
+      typeof object === "object" &&
+      "id" in object &&
+      typeof object.id === "string"
+    ) {
+      byId.set(object.id, object);
+    }
+  }
+
+  return Array.from(byId.values()).sort((a, b) => {
+    const az = typeof a.zIndex === "number" ? a.zIndex : 0;
+    const bz = typeof b.zIndex === "number" ? b.zIndex : 0;
+
+    return az - bz;
+  });
+}
+
 function toCanvasState(
   data: unknown,
   payloadRef: string,
@@ -84,17 +154,12 @@ function toCanvasState(
   // The storage API may return either:
   //
   // {
-  //   payload: {
-  //     nodes: [...],
-  //     edges: [...],
-  //     viewport: {...},
-  //     settings: {...}
-  //   }
+  //   payload: {...}
   // }
   //
   // or the stored payload directly.
   //
-  // Support both forms so loading remains backward-compatible.
+  // Support both forms.
 
   const raw =
     data &&
@@ -111,37 +176,56 @@ function toCanvasState(
   }
 
   const stored = raw as {
+    objects?: unknown;
     nodes?: unknown;
     edges?: unknown;
-    objects?: unknown;
+    drawings?: unknown;
     viewport?: unknown;
     settings?: unknown;
   };
 
-  // Current external storage format.
+  // Preferred path:
   //
-  // All Unity Map Studio canvas objects are deliberately stored in
-  // "nodes", including line/connector CanvasObjects.
-  if (Array.isArray(stored.nodes)) {
+  // If our canonical Unity Map Studio `objects` array is still present,
+  // use it directly. This is the exact representation that was saved and
+  // therefore preserves all canvas object types and their original order.
+  if (Array.isArray(stored.objects)) {
     return {
-      objects: stored.nodes as CanvasState["objects"],
+      objects: stored.objects as CanvasState["objects"],
+
       viewport: isViewport(stored.viewport)
         ? stored.viewport
-        : { x: 0, y: 0, zoom: 1 },
+        : {
+            x: 0,
+            y: 0,
+            zoom: 1,
+          },
+
       settings: isSettings(stored.settings)
         ? stored.settings
         : {},
     };
   }
 
-  // Backward compatibility with older payloads that were saved using
-  // the app's internal CanvasState property name "objects".
-  if (Array.isArray(stored.objects)) {
+  // Fallback:
+  //
+  // If the external storage server returns only its split schema,
+  // reconstruct Unity Map Studio's single objects array from
+  // nodes + edges + drawings.
+  const mergedObjects = mergeExternalArrays(stored);
+
+  if (mergedObjects) {
     return {
-      objects: stored.objects as CanvasState["objects"],
+      objects: mergedObjects,
+
       viewport: isViewport(stored.viewport)
         ? stored.viewport
-        : { x: 0, y: 0, zoom: 1 },
+        : {
+            x: 0,
+            y: 0,
+            zoom: 1,
+          },
+
       settings: isSettings(stored.settings)
         ? stored.settings
         : {},
@@ -149,26 +233,28 @@ function toCanvasState(
   }
 
   throw new Error(
-    `Μη έγκυρα δεδομένα (λείπει πίνακας nodes/objects) από το storage API για ${payloadRef}`,
+    `Μη έγκυρα δεδομένα (λείπουν objects ή έγκυρα nodes/edges/drawings) από το storage API για ${payloadRef}`,
   );
 }
 
 /**
- * Uploads the full board JSON via our own Vercel proxy.
+ * Uploads the full board JSON via our own proxy.
  *
- * External API schema:
+ * External request shape:
  *
  * {
  *   payload: {
+ *     objects: [...],
  *     nodes: [...],
  *     edges: [...],
+ *     drawings: [...],
  *     viewport: {...},
  *     settings: {...}
  *   }
  * }
  *
- * Throws on every failure. A failed external upload must never be
- * treated as a successful Firestore save.
+ * Firestore metadata must NEVER be written unless this external upload
+ * has already been confirmed successful.
  */
 export async function savePayload(
   state: CanvasState,
@@ -182,9 +268,11 @@ export async function savePayload(
   try {
     res = await fetch(PROXY_BASE, {
       method: "POST",
+
       headers: {
         "Content-Type": "application/json",
       },
+
       body,
     });
   } catch (networkErr) {
@@ -220,7 +308,9 @@ export async function savePayload(
 
   return {
     payloadRef: String(data.payloadRef),
+
     payloadUrl: String(data.payloadUrl),
+
     size:
       typeof data.size === "number"
         ? data.size
@@ -229,8 +319,8 @@ export async function savePayload(
 }
 
 /**
- * Loads a board payload through our Vercel proxy and converts the
- * external storage representation back to CanvasState.
+ * Fetches the board JSON back through our proxy and converts the
+ * external representation into Unity Map Studio's CanvasState.
  */
 export async function loadPayload(
   payloadRef: string,
@@ -266,8 +356,8 @@ export async function loadPayload(
 /**
  * Deletes an externally stored payload.
  *
- * A 404 means that the payload is already gone, so it is considered
- * successful. All other failures are surfaced.
+ * A 404 means that it is already gone, therefore it is considered a
+ * successful delete.
  */
 export async function deletePayload(
   payloadRef: string,
@@ -299,7 +389,7 @@ export async function deletePayload(
 }
 
 /**
- * Simple storage-server connectivity check.
+ * Simple connectivity check for the external storage service.
  */
 export async function checkStorageHealth(): Promise<boolean> {
   try {
