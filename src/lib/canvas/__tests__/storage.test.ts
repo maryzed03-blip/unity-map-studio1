@@ -1,10 +1,13 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { emptyCanvasState, type CanvasState } from "../types";
 
-// Mock the quota-guard wrappers and the payload-api before importing storage.
 const cGetDocMock = vi.fn();
 const cSetDocMock = vi.fn();
 const getDocFromServerMock = vi.fn();
+const savePayloadMock = vi.fn();
+const loadPayloadMock = vi.fn();
+const deletePayloadMock = vi.fn();
+
 vi.mock("../../quota-guard", () => ({
   cGetDoc: (...a: unknown[]) => cGetDocMock(...a),
   cSetDoc: (...a: unknown[]) => cSetDocMock(...a),
@@ -15,196 +18,221 @@ vi.mock("firebase/firestore", () => ({
   serverTimestamp: () => ({ __ts: true }),
   getDocFromServer: (...a: unknown[]) => getDocFromServerMock(...a),
 }));
-
-const loadPayloadMock = vi.fn();
-const savePayloadMock = vi.fn();
-const deletePayloadMock = vi.fn();
 vi.mock("../payload-api", () => ({
-  loadPayload: (...a: unknown[]) => loadPayloadMock(...a),
   savePayload: (...a: unknown[]) => savePayloadMock(...a),
+  loadPayload: (...a: unknown[]) => loadPayloadMock(...a),
   deletePayload: (...a: unknown[]) => deletePayloadMock(...a),
 }));
+vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
-vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
+// Minimal localStorage stub for the LocalMapStore fallback.
+const store = new Map<string, string>();
+vi.stubGlobal("window", {
+  localStorage: {
+    getItem: (k: string) => store.get(k) ?? null,
+    setItem: (k: string, v: string) => void store.set(k, v),
+    removeItem: (k: string) => void store.delete(k),
+  },
+});
 
-import { FirestoreMapStore } from "../storage";
+function fakeSnap(data: Record<string, unknown> | undefined) {
+  return {
+    exists: () => data !== undefined,
+    data: () => data,
+  };
+}
 
-beforeEach(() => {
+let FirestoreMapStore: new () => {
+  save: (mapId: string, state: CanvasState, opts?: { inline?: boolean }) => Promise<void>;
+  load: (mapId: string) => Promise<CanvasState | null>;
+  loadWithMeta: (mapId: string) => Promise<{ state: CanvasState | null; savedAt: number }>;
+  delete: (mapId: string) => Promise<void>;
+};
+
+beforeEach(async () => {
   cGetDocMock.mockReset();
   cSetDocMock.mockReset();
-  loadPayloadMock.mockReset();
-  savePayloadMock.mockReset();
-  deletePayloadMock.mockReset();
   getDocFromServerMock.mockReset();
-  // Default: verification reads back whatever was just written, i.e. the
-  // write "succeeded" — matches real Firestore behavior for a normal,
-  // permitted write and keeps existing save() tests focused on what was
-  // sent rather than on the verification step itself.
+  savePayloadMock.mockReset();
+  loadPayloadMock.mockReset();
+  deletePayloadMock.mockReset();
+  store.clear();
+
+  // Default: the metadata verification read reflects whatever payloadRef
+  // was in the last cSetDoc call — i.e. a normal, successful write.
   getDocFromServerMock.mockImplementation(() => {
     const lastWrite = cSetDocMock.mock.calls.at(-1)?.[1] as Record<string, unknown> | undefined;
     return Promise.resolve(fakeSnap(lastWrite));
   });
+  cSetDocMock.mockResolvedValue(undefined);
+
+  ({ FirestoreMapStore } = await import("../storage") as unknown as {
+    FirestoreMapStore: typeof FirestoreMapStore;
+  });
 });
 
-afterEach(() => {
-  vi.restoreAllMocks();
-});
+describe("save() — external path (personal/solo boards, default)", () => {
+  it("uploads to the payload API, then writes ONLY a small pointer to Firestore", async () => {
+    savePayloadMock.mockResolvedValueOnce({
+      payloadRef: "board_abc123",
+      payloadUrl: "https://demo.unityenergetics.org/unity-map-api/payloads/board_abc123",
+      size: 4242,
+    });
 
-function fakeSnap(data: unknown) {
-  return { exists: () => data != null, data: () => data };
-}
+    const store2 = new FirestoreMapStore();
+    const state: CanvasState = { ...emptyCanvasState(), objects: [{ id: "x" } as never] };
+    await store2.save("m1", state);
 
-describe("FirestoreMapStore.loadWithMeta — dual-read", () => {
-  it("returns inline payload directly (OLD format) without calling payload-api", async () => {
-    const inline: CanvasState = { ...emptyCanvasState(), objects: [] };
-    getDocFromServerMock.mockResolvedValueOnce(
-      fakeSnap({ payload: inline, savedAt: { toMillis: () => 1000 } }),
-    );
-    const store = new FirestoreMapStore();
-    const r = await store.loadWithMeta("m1");
-    expect(r.state).toEqual(inline);
-    expect(r.savedAt).toBe(1000);
-    expect(loadPayloadMock).not.toHaveBeenCalled();
+    expect(savePayloadMock).toHaveBeenCalledTimes(1);
+    expect(cSetDocMock).toHaveBeenCalledTimes(1);
+    const written = cSetDocMock.mock.calls[0][1] as Record<string, unknown>;
+    expect(written.payloadRef).toBe("board_abc123");
+    expect(written.payloadUrl).toContain("board_abc123");
+    expect(written.payloadSize).toBe(4242);
+    // The whole point: Firestore never gets the actual board content.
+    expect(written.payload).toBeNull();
   });
 
-  it("calls loadPayload for NEW payloadRef/payloadUrl format", async () => {
+  it("does NOT touch Firestore at all if the external upload fails", async () => {
+    savePayloadMock.mockRejectedValueOnce(new Error("storage API unreachable"));
+
+    const store2 = new FirestoreMapStore();
+    await expect(store2.save("m2", emptyCanvasState())).rejects.toThrow();
+    expect(cSetDocMock).not.toHaveBeenCalled();
+  });
+
+  it("throws if the Firestore metadata write itself fails after a successful upload", async () => {
+    savePayloadMock.mockResolvedValueOnce({
+      payloadRef: "board_xyz",
+      payloadUrl: "https://x/payloads/board_xyz",
+      size: 10,
+    });
+    cSetDocMock.mockRejectedValueOnce(new Error("permission-denied"));
+
+    const store2 = new FirestoreMapStore();
+    await expect(store2.save("m3", emptyCanvasState())).rejects.toThrow();
+  });
+
+  it("retries once, then throws when the server metadata STILL doesn't match after retry — a persistent rejection, not a timing fluke", async () => {
+    savePayloadMock.mockResolvedValueOnce({
+      payloadRef: "board_new",
+      payloadUrl: "https://x/payloads/board_new",
+      size: 10,
+    });
+    const staleSnap = fakeSnap({ payloadRef: "board_OLD" });
+    getDocFromServerMock.mockResolvedValueOnce(staleSnap).mockResolvedValueOnce(staleSnap);
+
+    const store2 = new FirestoreMapStore();
+    await expect(store2.save("m4", emptyCanvasState())).rejects.toThrow();
+    expect(cSetDocMock).toHaveBeenCalledTimes(1); // metadata write itself only happens once
+    expect(getDocFromServerMock).toHaveBeenCalledTimes(2); // but verification retried
+  }, 10000);
+
+  it("recovers on retry if the first verification mismatch was transient", async () => {
+    savePayloadMock.mockResolvedValueOnce({
+      payloadRef: "board_ok",
+      payloadUrl: "https://x/payloads/board_ok",
+      size: 10,
+    });
+    getDocFromServerMock
+      .mockResolvedValueOnce(fakeSnap({ payloadRef: "board_OLD" }))
+      .mockResolvedValueOnce(fakeSnap({ payloadRef: "board_ok" }));
+
+    const store2 = new FirestoreMapStore();
+    await expect(store2.save("m5", emptyCanvasState())).resolves.toBeUndefined();
+  }, 10000);
+});
+
+describe("save() — inline path (live sessions, group boards)", () => {
+  it("writes the full payload directly to Firestore and never calls the payload API", async () => {
+    const state: CanvasState = { ...emptyCanvasState(), objects: [] };
+    const store2 = new FirestoreMapStore();
+    await store2.save("live-1", state, { inline: true });
+
+    expect(savePayloadMock).not.toHaveBeenCalled();
+    expect(cSetDocMock).toHaveBeenCalledTimes(1);
+    const written = cSetDocMock.mock.calls[0][1] as Record<string, unknown>;
+    expect(written.payload).toEqual(state);
+    expect(written.payloadRef).toBeNull();
+  });
+
+  it("does not run write-verification for inline saves", async () => {
+    const store2 = new FirestoreMapStore();
+    await store2.save("live-2", emptyCanvasState(), { inline: true });
+    expect(getDocFromServerMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("loadWithMeta() — dual-read", () => {
+  it("follows payloadRef/payloadUrl to the payload API for external saves", async () => {
     getDocFromServerMock.mockResolvedValueOnce(
       fakeSnap({
-        payloadRef: "abc",
-        payloadUrl: "https://x/abc",
+        payloadRef: "board_abc",
+        payloadUrl: "https://x/payloads/board_abc",
         savedAt: { toMillis: () => 2000 },
       }),
     );
     const remoteState: CanvasState = { ...emptyCanvasState(), objects: [] };
     loadPayloadMock.mockResolvedValueOnce(remoteState);
 
-    const store = new FirestoreMapStore();
-    const r = await store.loadWithMeta("m2");
-    expect(loadPayloadMock).toHaveBeenCalledWith("abc", "https://x/abc");
+    const store2 = new FirestoreMapStore();
+    const r = await store2.loadWithMeta("m6");
+    expect(loadPayloadMock).toHaveBeenCalledWith("board_abc", "https://x/payloads/board_abc");
     expect(r.state).toEqual(remoteState);
     expect(r.savedAt).toBe(2000);
   });
 
-  it("falls back to cGetDoc when getDocFromServer fails (e.g. offline)", async () => {
+  it("uses the inline payload directly (no payload-API call) for live/group/legacy boards", async () => {
+    const inline: CanvasState = { ...emptyCanvasState(), objects: [] };
+    getDocFromServerMock.mockResolvedValueOnce(
+      fakeSnap({ payload: inline, savedAt: { toMillis: () => 1000 } }),
+    );
+    const store2 = new FirestoreMapStore();
+    const r = await store2.loadWithMeta("m7");
+    expect(r.state).toEqual(inline);
+    expect(r.savedAt).toBe(1000);
+    expect(loadPayloadMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to cGetDoc when the fresh server read fails (e.g. offline)", async () => {
     getDocFromServerMock.mockRejectedValueOnce(new Error("client is offline"));
     const inline: CanvasState = { ...emptyCanvasState(), objects: [] };
     cGetDocMock.mockResolvedValueOnce(fakeSnap({ payload: inline, savedAt: { toMillis: () => 3000 } }));
 
-    const store = new FirestoreMapStore();
-    const r = await store.loadWithMeta("m-offline");
+    const store2 = new FirestoreMapStore();
+    const r = await store2.loadWithMeta("m8");
     expect(r.state).toEqual(inline);
     expect(r.savedAt).toBe(3000);
   });
-});
 
-describe("FirestoreMapStore.save — always writes directly to Firestore", () => {
-  it("writes the full payload directly to Firestore and never calls the external payload API", async () => {
-    cSetDocMock.mockResolvedValueOnce(undefined);
-    const state: CanvasState = { ...emptyCanvasState(), objects: [] };
+  it("falls back to the local device cache if everything remote fails", async () => {
+    getDocFromServerMock.mockRejectedValueOnce(new Error("offline"));
+    cGetDocMock.mockRejectedValueOnce(new Error("offline"));
+    const store2 = new FirestoreMapStore();
+    // Prime the local cache via a prior successful inline save.
+    await store2.save("m9", { ...emptyCanvasState(), objects: [{ id: "cached" } as never] }, { inline: true });
+    getDocFromServerMock.mockRejectedValueOnce(new Error("offline"));
+    cGetDocMock.mockRejectedValueOnce(new Error("offline"));
 
-    const store = new FirestoreMapStore();
-    await store.save("m3", state);
-
-    expect(savePayloadMock).not.toHaveBeenCalled();
-    expect(cSetDocMock).toHaveBeenCalledTimes(1);
-    const written = cSetDocMock.mock.calls[0][1] as Record<string, unknown>;
-    expect(written.payload).toEqual(state);
-    expect(written.payloadRef).toBeNull();
-    expect(written.payloadUrl).toBeNull();
-  });
-
-  it("save never depends on the external payload API succeeding — it's not called at all", async () => {
-    savePayloadMock.mockRejectedValueOnce(new Error("external API unreachable"));
-    cSetDocMock.mockResolvedValueOnce(undefined);
-
-    const store = new FirestoreMapStore();
-    await store.save("m4", emptyCanvasState());
-
-    expect(savePayloadMock).not.toHaveBeenCalled();
-    expect(cSetDocMock).toHaveBeenCalledTimes(1);
+    const r = await store2.loadWithMeta("m9");
+    expect(r.state?.objects?.[0]).toMatchObject({ id: "cached" });
   });
 });
 
-describe("FirestoreMapStore.save — inline mode (live sessions, rooms, groups)", () => {
-  it("writes the full payload directly to Firestore and never calls the external payload API", async () => {
-    cSetDocMock.mockResolvedValueOnce(undefined);
-    const state: CanvasState = { ...emptyCanvasState(), objects: [] };
+describe("delete()", () => {
+  it("deletes the external payload if the board had one, and always clears the local cache", async () => {
+    cGetDocMock.mockResolvedValueOnce(fakeSnap({ payloadRef: "board_to_delete" }));
+    deletePayloadMock.mockResolvedValueOnce(undefined);
 
-    const store = new FirestoreMapStore();
-    await store.save("room-1-board", state, { inline: true });
-
-    expect(savePayloadMock).not.toHaveBeenCalled();
-    expect(cSetDocMock).toHaveBeenCalledTimes(1);
-    const written = cSetDocMock.mock.calls[0][1] as Record<string, unknown>;
-    expect(written.payload).toEqual(state);
-    expect(written.payloadRef).toBeNull();
-    expect(written.payloadUrl).toBeNull();
+    const store2 = new FirestoreMapStore();
+    await store2.delete("m10");
+    expect(deletePayloadMock).toHaveBeenCalledWith("board_to_delete");
   });
 
-  it("inline save still succeeds even when the external payload API would have failed", async () => {
-    savePayloadMock.mockRejectedValueOnce(new Error("external API unreachable"));
-    cSetDocMock.mockResolvedValueOnce(undefined);
-
-    const store = new FirestoreMapStore();
-    await store.save("room-2-board", emptyCanvasState(), { inline: true });
-
-    // The whole point: inline saves must not depend on savePayload at all.
-    expect(savePayloadMock).not.toHaveBeenCalled();
-    expect(cSetDocMock).toHaveBeenCalledTimes(1);
+  it("does not call deletePayload for a board that never had an external payload (inline-only)", async () => {
+    cGetDocMock.mockResolvedValueOnce(fakeSnap({ payload: emptyCanvasState() }));
+    const store2 = new FirestoreMapStore();
+    await store2.delete("m11");
+    expect(deletePayloadMock).not.toHaveBeenCalled();
   });
-
-  it("a subsequent loadWithMeta prefers the fresh inline payload over a stale external pointer", async () => {
-    // Simulate a board that once had an external payloadRef/Url, then got an
-    // inline save on top (payloadRef/Url explicitly nulled by save()).
-    getDocFromServerMock.mockResolvedValueOnce(
-      fakeSnap({
-        payload: { ...emptyCanvasState(), objects: [] },
-        payloadRef: null,
-        payloadUrl: null,
-        savedAt: { toMillis: () => 5000 },
-      }),
-    );
-    const store = new FirestoreMapStore();
-    const r = await store.loadWithMeta("room-3-board");
-    expect(loadPayloadMock).not.toHaveBeenCalled();
-    expect(r.savedAt).toBe(5000);
-  });
-});
-
-describe("FirestoreMapStore.save — write verification", () => {
-  it("retries once, then throws (and shows an error) when the server content STILL doesn't match after the retry — simulates a persistent security rule rejection, not a timing fluke", async () => {
-    cSetDocMock.mockResolvedValue(undefined);
-    // Server still has OLD content on BOTH attempts — the write never
-    // actually lands there, even though cSetDoc's promise resolves
-    // "successfully" each time (Firestore's local-cache-first optimistic
-    // write behavior).
-    const staleSnap = fakeSnap({ payload: { ...emptyCanvasState(), objects: [{ id: "old-untouched" }] } });
-    getDocFromServerMock.mockResolvedValueOnce(staleSnap).mockResolvedValueOnce(staleSnap);
-
-    const store = new FirestoreMapStore();
-    const state: CanvasState = { ...emptyCanvasState(), objects: [{ id: "new-edit" } as never] };
-    await expect(store.save("m5", state)).rejects.toThrow();
-    // Confirms a retry actually happened (write attempted twice).
-    expect(cSetDocMock).toHaveBeenCalledTimes(2);
-  }, 10000);
-
-  it("succeeds silently when the server content matches what was sent", async () => {
-    cSetDocMock.mockResolvedValueOnce(undefined);
-    const store = new FirestoreMapStore();
-    const state: CanvasState = { ...emptyCanvasState(), objects: [] };
-    await expect(store.save("m6", state)).resolves.toBeUndefined();
-  });
-
-  it("recovers on retry if the first mismatch was transient — write succeeds without surfacing an error", async () => {
-    cSetDocMock.mockResolvedValue(undefined);
-    const state: CanvasState = { ...emptyCanvasState(), objects: [{ id: "new-edit" } as never] };
-    const sanitized = JSON.parse(JSON.stringify(state));
-    getDocFromServerMock
-      .mockResolvedValueOnce(fakeSnap({ payload: { ...emptyCanvasState(), objects: [{ id: "old-untouched" }] } }))
-      .mockResolvedValueOnce(fakeSnap({ payload: sanitized }));
-
-    const store = new FirestoreMapStore();
-    await expect(store.save("m7", state)).resolves.toBeUndefined();
-    expect(cSetDocMock).toHaveBeenCalledTimes(2);
-  }, 10000);
 });
