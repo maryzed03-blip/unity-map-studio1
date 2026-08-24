@@ -1,140 +1,123 @@
-// External board payload storage client.
+// payload-api.ts — client for the external "Unity Map API" payload storage
+// server (demo.unityenergetics.org/unity-map-api). Used to keep Firestore
+// usage minimal: the (potentially large) canvas JSON for a saved board
+// lives here, and only a small pointer (payloadRef/payloadUrl/size) is
+// kept in Firestore. This matters at scale (many students) — Firestore
+// document size and storage/read costs stay low regardless of how big
+// individual boards get.
 //
-// Goal (Stage 4): keep bulky CanvasState JSON OUT of Firestore documents to
-// reduce Firestore STORAGE usage (Spark plan caps total storage at 1GB).
-// Firestore continues to hold only lightweight metadata pointing at the
-// payload stored here.
-//
-// SECURITY TRADEOFF — read carefully:
-// The Bearer token below is embedded in the client bundle via
-// VITE_BOARD_STORAGE_TOKEN and is therefore VISIBLE to anyone inspecting
-// network requests in their own browser. This was a deliberate choice to
-// avoid requiring Firebase Blaze (Cloud Functions) for a server-side proxy.
-// The token is SHARED across all users of the app (not per-user), so anyone
-// with it can save/load/delete ANY board's payload on the external server.
-// This is a KNOWN, ACCEPTED limitation, not an oversight. It does NOT grant
-// access to Firestore, Firebase Auth, or any teacher's OpenAI key — those
-// remain on separate, properly-scoped credentials.
-//
-// We never log the token, and we scrub Authorization headers from any error
-// surfaced via toast/console.
+// CRITICAL SAFETY RULE: every function here either resolves with a
+// genuinely confirmed result, or throws. Nothing is ever silently
+// swallowed. storage.ts relies on this — it must NEVER write Firestore
+// metadata claiming a save succeeded unless this module's savePayload()
+// actually, synchronously confirmed success with the server. That
+// mismatch (metadata says "saved", no real payload behind it) is what
+// caused boards to come back empty in an earlier version of this app.
 
 import type { CanvasState } from "./types";
 
-const BASE_URL = "https://demo.unityenergetics.org/unity-map-api";
+const API_BASE = "https://demo.unityenergetics.org/unity-map-api";
 
-function token(): string {
-  const t = import.meta.env.VITE_BOARD_STORAGE_TOKEN as string | undefined;
-  if (!t) {
+function authHeader(): Record<string, string> {
+  const token = import.meta.env.VITE_BOARD_STORAGE_TOKEN as string | undefined;
+  if (!token) {
     throw new Error(
-      "VITE_BOARD_STORAGE_TOKEN is not configured — external board storage is unavailable.",
+      "VITE_BOARD_STORAGE_TOKEN δεν είναι ρυθμισμένο σε αυτό το περιβάλλον — η αποθήκευση δεν μπορεί να προχωρήσει.",
     );
   }
-  return t;
+  return { Authorization: `Bearer ${token}` };
 }
 
-function authHeaders(): Record<string, string> {
-  return {
-    "Content-Type": "application/json",
-    Authorization: `Bearer ${token()}`,
-  };
-}
-
-/** Strip anything that looks like an Authorization header / bearer token
- *  from an error message before it reaches a toast or console. */
-function scrub(msg: string): string {
-  return msg
-    .replace(/Bearer\s+[A-Za-z0-9._\-=]+/gi, "Bearer ***")
-    .replace(/Authorization:\s*[^\s,;]+/gi, "Authorization: ***");
-}
-
-export interface SavePayloadResult {
+export interface SavedPayload {
   payloadRef: string;
   payloadUrl: string;
   size: number;
 }
 
-interface SavePayloadResponse {
-  success?: boolean;
-  payloadRef?: string;
-  payloadUrl?: string;
-  size?: number;
-  error?: string;
-}
-
-export async function healthcheck(): Promise<boolean> {
-  try {
-    const res = await fetch(`${BASE_URL}/health`, { headers: authHeaders() });
-    return res.ok;
-  } catch {
-    return false;
-  }
-}
-
-export async function savePayload(state: CanvasState): Promise<SavePayloadResult> {
+/** POST /payloads — uploads the full board JSON, returns a pointer to it.
+ *  Throws on any failure (network, non-2xx, or a malformed response) —
+ *  callers must never treat a thrown error as a partial success. */
+export async function savePayload(state: CanvasState): Promise<SavedPayload> {
+  const body = JSON.stringify(state);
   let res: Response;
   try {
-    res = await fetch(`${BASE_URL}/payloads`, {
+    res = await fetch(`${API_BASE}/payloads`, {
       method: "POST",
-      headers: authHeaders(),
-      body: JSON.stringify(state),
+      headers: {
+        "Content-Type": "application/json",
+        ...authHeader(),
+      },
+      body,
     });
-  } catch (e) {
-    throw new Error(scrub(`Network error saving payload: ${(e as Error).message}`));
+  } catch (networkErr) {
+    throw new Error(
+      `Αδυναμία σύνδεσης με το storage API: ${networkErr instanceof Error ? networkErr.message : String(networkErr)}`,
+    );
   }
-  let data: SavePayloadResponse = {};
-  try {
-    data = (await res.json()) as SavePayloadResponse;
-  } catch {
-    // fall through — handled below
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Το storage API απέρριψε την αποθήκευση (HTTP ${res.status}): ${text || res.statusText}`);
   }
-  if (!res.ok || data.success === false || !data.payloadRef || !data.payloadUrl) {
-    throw new Error(scrub(data.error || `Payload save failed (HTTP ${res.status})`));
+  const data = await res.json().catch(() => null);
+  if (!data || data.success !== true || !data.payloadRef || !data.payloadUrl) {
+    throw new Error("Το storage API επέστρεψε μη έγκυρη ή ημιτελή απάντηση κατά την αποθήκευση.");
   }
   return {
-    payloadRef: data.payloadRef,
-    payloadUrl: data.payloadUrl,
-    size: typeof data.size === "number" ? data.size : 0,
+    payloadRef: String(data.payloadRef),
+    payloadUrl: String(data.payloadUrl),
+    size: typeof data.size === "number" ? data.size : body.length,
   };
 }
 
-export async function loadPayload(payloadRef: string, payloadUrl?: string): Promise<CanvasState> {
-  // Prefer the full payloadUrl returned by save to avoid assuming URL structure.
-  const url = payloadUrl || `${BASE_URL}/payloads/${encodeURIComponent(payloadRef)}`;
+/** GET /payloads/{payloadRef} (via the full payloadUrl returned by
+ *  savePayload) — fetches the actual board JSON back. Throws if the
+ *  request fails or the response doesn't look like a valid CanvasState. */
+export async function loadPayload(payloadRef: string, payloadUrl: string): Promise<CanvasState> {
+  const url = payloadUrl || `${API_BASE}/payloads/${encodeURIComponent(payloadRef)}`;
   let res: Response;
   try {
-    res = await fetch(url, { headers: authHeaders() });
-  } catch (e) {
-    throw new Error(scrub(`Network error loading payload: ${(e as Error).message}`));
+    res = await fetch(url, { headers: authHeader() });
+  } catch (networkErr) {
+    throw new Error(
+      `Αδυναμία σύνδεσης με το storage API κατά τη φόρτωση: ${networkErr instanceof Error ? networkErr.message : String(networkErr)}`,
+    );
   }
   if (!res.ok) {
-    throw new Error(scrub(`Payload load failed (HTTP ${res.status})`));
+    throw new Error(`Αποτυχία φόρτωσης από το storage API (HTTP ${res.status}) για ${payloadRef}`);
   }
-  let data: unknown;
-  try {
-    data = await res.json();
-  } catch {
-    throw new Error("Payload load failed: response is not JSON.");
+  const data = await res.json().catch(() => null);
+  if (!data || !Array.isArray(data.objects)) {
+    throw new Error(`Μη έγκυρα δεδομένα (λείπει το πεδίο objects) από το storage API για ${payloadRef}`);
   }
-  const state = data as Partial<CanvasState> | null;
-  if (!state || !Array.isArray((state as CanvasState).objects)) {
-    throw new Error("Payload load failed: malformed canvas state (missing `objects`).");
-  }
-  return state as CanvasState;
+  return data as CanvasState;
 }
 
-/** Best-effort: never throws. A failed remote delete must not block the
- *  user's local delete-project flow. */
+/** DELETE /payloads/{payloadRef}. A 404 (already gone) is treated as
+ *  success — everything else throws. */
 export async function deletePayload(payloadRef: string): Promise<void> {
+  let res: Response;
   try {
-    const res = await fetch(`${BASE_URL}/payloads/${encodeURIComponent(payloadRef)}`, {
+    res = await fetch(`${API_BASE}/payloads/${encodeURIComponent(payloadRef)}`, {
       method: "DELETE",
-      headers: authHeaders(),
+      headers: authHeader(),
     });
-    if (!res.ok) {
-      console.warn(scrub(`deletePayload: remote delete failed (HTTP ${res.status})`));
-    }
-  } catch (e) {
-    console.warn(scrub(`deletePayload: ${(e as Error).message}`));
+  } catch (networkErr) {
+    throw new Error(
+      `Αδυναμία σύνδεσης με το storage API κατά τη διαγραφή: ${networkErr instanceof Error ? networkErr.message : String(networkErr)}`,
+    );
+  }
+  if (!res.ok && res.status !== 404) {
+    throw new Error(`Αποτυχία διαγραφής από το storage API (HTTP ${res.status})`);
+  }
+}
+
+/** GET /health — simple connectivity/config check, e.g. for a settings
+ *  page or startup diagnostic. Never throws; returns false on any problem. */
+export async function checkStorageHealth(): Promise<boolean> {
+  try {
+    const res = await fetch(`${API_BASE}/health`);
+    return res.ok;
+  } catch {
+    return false;
   }
 }
