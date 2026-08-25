@@ -303,9 +303,9 @@ export async function renameProject(id: string, title: string) {
  */
 export async function deleteProject(id: string): Promise<void> {
   try {
-    await mapStore.deleteRemotePayload?.(id);
+    await mapStore.delete(id);
   } catch (e) {
-    console.warn("deleteRemotePayload failed (continuing with project delete)", e);
+    console.warn("External payload cleanup failed (continuing with project delete)", e);
   }
   await cDeleteDoc(doc(db(), "projects", id));
 }
