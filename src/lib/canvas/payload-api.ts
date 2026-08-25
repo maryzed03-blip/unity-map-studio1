@@ -301,8 +301,12 @@ export async function savePayload(
     !data.payloadRef ||
     !data.payloadUrl
   ) {
+    // Surface the server's own error text when it provides one — a
+    // generic message here makes real failures (bad schema, rejected
+    // auth, quota) very hard to diagnose from the browser console.
+    const detail = data?.error ? `: ${data.error}` : "";
     throw new Error(
-      "Το storage API επέστρεψε μη έγκυρη ή ημιτελή απάντηση κατά την αποθήκευση.",
+      `Το storage API επέστρεψε μη έγκυρη ή ημιτελή απάντηση κατά την αποθήκευση${detail}`,
     );
   }
 
@@ -356,8 +360,14 @@ export async function loadPayload(
 /**
  * Deletes an externally stored payload.
  *
- * A 404 means that it is already gone, therefore it is considered a
- * successful delete.
+ * BEST-EFFORT BY DESIGN — this never throws. Removing the remote payload
+ * is cleanup that must never block or fail the user-visible action that
+ * triggered it (deleting a project). If it fails, the project is still
+ * deleted and we just log it; the worst case is an orphaned file on the
+ * storage server, which is far better than a user being unable to delete
+ * their own project because a cleanup call failed.
+ *
+ * A 404 means it is already gone, which is a successful outcome.
  */
 export async function deletePayload(
   payloadRef: string,
@@ -372,18 +382,16 @@ export async function deletePayload(
       },
     );
   } catch (networkErr) {
-    throw new Error(
-      `Αδυναμία σύνδεσης με το storage API κατά τη διαγραφή: ${
-        networkErr instanceof Error
-          ? networkErr.message
-          : String(networkErr)
-      }`,
+    console.warn(
+      `Δεν ήταν δυνατή η διαγραφή του payload ${payloadRef} από το storage API (σφάλμα δικτύου)`,
+      networkErr,
     );
+    return;
   }
 
   if (!res.ok && res.status !== 404) {
-    throw new Error(
-      `Αποτυχία διαγραφής από το storage API (HTTP ${res.status})`,
+    console.warn(
+      `Δεν ήταν δυνατή η διαγραφή του payload ${payloadRef} από το storage API (HTTP ${res.status})`,
     );
   }
 }
