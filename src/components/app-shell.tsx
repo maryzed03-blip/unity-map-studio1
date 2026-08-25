@@ -14,7 +14,6 @@ import {
   GraduationCap,
   LogOut,
   Settings,
-  Bell,
   Mail,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -201,15 +200,6 @@ export function AppShell({ children }: { children: ReactNode }) {
             </Link>
           </div>
           <div className="flex items-center gap-2">
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-9 w-9"
-              title="Ειδοποιήσεις"
-              aria-label="Ειδοποιήσεις"
-            >
-              <Bell className="h-4 w-4" />
-            </Button>
             <Button
               asChild
               variant="ghost"
