@@ -59,7 +59,7 @@ describe("payload-api.loadPayload", () => {
 
   it("throws when objects array is missing", async () => {
     mockFetch(async () => new Response(JSON.stringify({ foo: 1 }), { status: 200 }));
-    await expect(loadPayload("abc", "https://x/abc")).rejects.toThrow(/malformed/i);
+    await expect(loadPayload("abc", "https://x/abc")).rejects.toThrow(/Μη έγκυρα δεδομένα|malformed/i);
   });
 
   it("throws on non-2xx", async () => {
