@@ -85,6 +85,12 @@ function teacherNav(): NavItem[] {
     },
     {
       to: "/lobby",
+      search: { tab: "received" },
+      label: "Απεσταλμένα από Μαθητές",
+      icon: <Mail className="h-4 w-4" />,
+    },
+    {
+      to: "/lobby",
       search: { tab: "submissions" },
       label: "Υποβολές",
       icon: <Inbox className="h-4 w-4" />,
@@ -94,6 +100,12 @@ function teacherNav(): NavItem[] {
       search: { tab: "students" },
       label: "Μαθητές",
       icon: <GraduationCap className="h-4 w-4" />,
+    },
+    {
+      to: "/lobby",
+      search: { tab: "archive" },
+      label: "Αρχείο",
+      icon: <Archive className="h-4 w-4" />,
     },
   ];
 }
