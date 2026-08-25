@@ -189,7 +189,10 @@ function tabMeta(
         action: <NewFolderButton />,
       };
     case "received":
-      return { title: "Απεσταλμένα από Συμμαθητές", subtitle: "Σχέδια που σας έχουν στείλει άλλοι χρήστες." };
+      return {
+        title: isTeacher ? "Απεσταλμένα από Μαθητές" : "Απεσταλμένα από Συμμαθητές",
+        subtitle: "Σχέδια που σας έχουν στείλει άλλοι χρήστες.",
+      };
     case "students":
       return {
         title: "Μαθητές",
