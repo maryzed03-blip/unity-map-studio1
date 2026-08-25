@@ -123,8 +123,23 @@ export function NotificationBell() {
               const isNew = it.ts > 0 && it.ts > lastSeen - 1;
               if (it.kind === "design") {
                 const d = it.data;
+                const dt = it.ts > 0 ? new Date(it.ts) : null;
+                const dateLabel = dt
+                  ? `${dt.toLocaleDateString("el-GR", { day: "2-digit", month: "2-digit", year: "numeric" })} · ${dt.toLocaleTimeString("el-GR", { hour: "2-digit", minute: "2-digit" })}`
+                  : null;
                 return (
-                  <div key={`d_${id}`} className="px-3 py-2.5 flex items-start gap-2.5">
+                  <button
+                    key={`d_${id}`}
+                    onClick={() => {
+                      setOpen(false);
+                      // Designs sent to you live in the "received" tab.
+                      // This previously pointed at "submissions", which is
+                      // an unimplemented placeholder — recipients were
+                      // sent to an empty page and couldn't find the design.
+                      navigate({ to: "/lobby", search: { tab: "received" } });
+                    }}
+                    className="w-full text-left px-3 py-2.5 flex items-start gap-2.5 hover:bg-muted transition-colors"
+                  >
                     <Mail className="h-4 w-4 mt-0.5 shrink-0 text-primary" />
                     <div className="min-w-0 flex-1">
                       <p className="text-xs">
@@ -134,17 +149,11 @@ export function NotificationBell() {
                           <span className="ml-1 text-amber-700">(διόρθωση εργασίας)</span>
                         )}
                       </p>
-                      <button
-                        className="text-xs text-primary hover:underline mt-1"
-                        onClick={() => {
-                          setOpen(false);
-                          navigate({ to: "/lobby", search: { tab: "submissions" } });
-                        }}
-                      >
-                        Προβολή στις υποβολές μου →
-                      </button>
+                      {dateLabel && (
+                        <p className="text-[11px] text-muted-foreground mt-0.5">{dateLabel}</p>
+                      )}
                     </div>
-                  </div>
+                  </button>
                 );
               }
               const inv = it.data;
